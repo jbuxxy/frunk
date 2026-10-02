@@ -50,24 +50,9 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `FRUNK_OWNER_EMAIL` | The admin account. On first start it gets the default tiles and a password-setup link in the log. |
 | `FRUNK_PUBLIC_URL` | Public address, e.g. `https://frunk.example.com`. Used in invite, pairing and Google links. **Set this in production.** |
 | `TRUSTED_PROXIES` | Reverse-proxy IPs or CIDRs (comma-separated) whose `X-Real-IP` / `X-Forwarded-*` headers are trusted. Default `127.0.0.1,::1`. Without it, the login lockout sees only your proxy's address. |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Turn on Google sign-in (see below). |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional Google sign-in. See [Google sign-in](docs/google-sign-in.md). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`) and data folder (default `./data`, `/data` in Docker). |
-
-### Google sign-in
-
-1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
-   create an **OAuth client ID** of type **Web application**.
-2. Under **Authorized JavaScript origins**, add your Frunk address, e.g.
-   `https://frunk.example.com`. This is what powers the one-tap "Continue as …"
-   button.
-3. Under **Authorized redirect URIs**, add `https://frunk.example.com/auth/google/callback`.
-4. On the **OAuth consent screen** (Google Auth Platform → Audience), publish the
-   app. While it's in *Testing*, only listed test users can sign in.
-5. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-
-Signing in with Google doesn't let strangers in. Only the admin, existing members,
-and people with a live invite can create an account.
 
 ## Development
 
@@ -78,10 +63,6 @@ npm run dev     # node --watch server.js, on http://localhost:3000
 npm test        # unit tests (node:test)
 npm run check   # syntax check of every source file
 ```
-
-To try Google sign-in locally, add `http://localhost:3000` (and
-`http://localhost`) to the client's JavaScript origins, and add
-`http://localhost:3000/auth/google/callback` as a redirect URI.
 
 To preview the car-only UI on a desktop, override the browser's user agent with
 one containing `Tesla` (Chrome DevTools → Network conditions).
@@ -107,9 +88,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 - Password sign-in is rate-limited per client IP.
 
 **Google sign-in**
-- Redirect-flow tokens come straight from Google's token endpoint.
-- One Tap tokens are signature-checked against Google's published keys and bound
-  to a one-time nonce.
+- Google tokens are verified before anyone is signed in, and only invited
+  people can create an account.
 
 **Requests and responses**
 - Every state-changing API call must be a JSON request, which blocks cross-site
