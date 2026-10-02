@@ -1,0 +1,6 @@
+# Runtime data (accounts, sessions, icon caches)
+data/
+.env
+node_modules/
+*.log
+.DS_Store

@@ -1,0 +1,15 @@
+services:
+  frunk:
+    build: .
+    image: frunk:local
+    container_name: frunk
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - ./data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 128M

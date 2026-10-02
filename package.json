@@ -1,0 +1,16 @@
+{
+  "name": "frunk",
+  "version": "1.0.0",
+  "description": "Big-button fullscreen launcher for the Tesla browser",
+  "private": true,
+  "main": "server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js && node --check accounts.js && node --check mailer.js && node --check fetcher.js && node --check public/app.js",
+    "test": "node --test test/*.test.js"
+  }
+}

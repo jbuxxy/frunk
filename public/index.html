@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frunk</title>
+  <meta name="theme-color" content="#0f1114">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-512.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css?v=__V__">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <img src="/icon.svg" alt="" width="40" height="40">
+      <span>Frunk</span>
+    </div>
+    <div class="clock" id="clock"></div>
+    <div class="actions">
+      <button class="pill fs-btn" id="fsBtn" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+        Fullscreen
+      </button>
+      <button class="pill" id="signInBtn" hidden>Sign in</button>
+      <button class="icon-btn avatar" id="accountBtn" aria-label="Account" hidden></button>
+      <button class="icon-btn" id="editBtn" aria-label="Edit sites" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="edit-banner" id="editBanner" hidden>
+    <span id="editBannerText">Tap a tile to edit · drag to reorder</span>
+    <button class="pill accent" id="doneBtn">Done</button>
+  </div>
+
+  <main class="grid" id="grid"></main>
+
+  <!-- Add / edit site -->
+  <dialog class="sheet" id="siteDialog">
+    <form method="dialog" id="siteForm">
+      <h2 id="siteTitle">Add site</h2>
+      <div class="preview-wrap"><div class="tile preview" id="tilePreview" aria-hidden="true"></div></div>
+      <div id="quickPickBox">
+        <div class="field-label">Popular</div>
+        <div class="quick-wrap">
+          <button type="button" class="quick-nav prev" id="quickPrev" aria-label="Previous suggestions">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
+          <div class="quick-picks" id="quickPicks"></div>
+          <button type="button" class="quick-nav next" id="quickNext" aria-label="More suggestions">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+      </div>
+      <label>Name<input name="name" autocomplete="off" placeholder="My site" maxlength="40"></label>
+      <label>Address<input name="url" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" placeholder="example.com" required></label>
+      <div class="field-label">Logo</div>
+      <div class="logo-options" id="logoOptions"></div>
+      <div class="field-label">Card color</div>
+      <div class="swatches" id="swatches"></div>
+      <label>Icon URL <span class="optional">(optional)</span><input name="icon" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" placeholder="Found automatically"></label>
+      <div class="sheet-actions">
+        <button type="button" class="pill danger" id="deleteBtn">Delete</button>
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="cancelBtn">Cancel</button>
+        <button type="submit" class="pill accent" id="saveBtn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- First tile tap in the car without fullscreen -->
+  <dialog class="sheet narrow" id="fsPrompt">
+    <form method="dialog">
+      <button type="button" class="sheet-x" id="fsPromptClose" aria-label="Close">&times;</button>
+      <div class="fs-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></div>
+      <h2>Go fullscreen?</h2>
+      <p class="hint">For the best experience while parked, use Frunk in fullscreen. You'll see a YouTube page &mdash; tap <b>Go to site</b> once and you're back.</p>
+      <p class="rear-tip"><b>Back seat screen?</b> Start something in fullscreen while parked, then tap <b>Join Front Display</b> (it shows a YouTube icon) on the rear screen. It keeps playing back there after you shift out of Park, and passengers can control it.</p>
+      <div class="menu">
+        <button type="button" class="pill accent" id="fsPromptGo">Go fullscreen</button>
+        <button type="button" class="pill" id="fsPromptJust">Just open</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Long-press menu for one tile -->
+  <dialog class="sheet narrow" id="tileMenu">
+    <form method="dialog">
+      <h2 id="tileMenuName"></h2>
+      <div class="menu">
+        <button type="button" class="pill" id="tileMenuEdit">Edit</button>
+        <button type="button" class="pill" id="tileMenuArrange">Rearrange tiles</button>
+        <button type="button" class="pill danger" id="tileMenuRemove">Remove</button>
+        <button type="button" class="pill" id="tileMenuCancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Sign in -->
+  <dialog class="sheet narrow" id="signInDialog">
+    <form method="dialog" id="signInForm">
+      <h2>Sign in</h2>
+      <p class="hint" id="signInNote" hidden></p>
+      <button type="button" class="phone-btn" id="phoneSignInBtn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg>
+        Sign in with your phone
+      </button>
+      <a class="google-btn" id="googleBtn" href="/auth/google" hidden>
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
+        Continue with Google
+      </a>
+      <div class="gsi-btn" id="gsiButton" hidden></div>
+      <div class="or" id="orDivider" hidden><span>or</span></div>
+      <label>Email<input name="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <div class="hint error" id="signInError"></div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="signInCancel">Cancel</button>
+        <button type="submit" class="pill accent">Sign in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Car: QR code for signing in with a phone -->
+  <dialog class="sheet narrow" id="pairDialog">
+    <form method="dialog">
+      <h2>Sign in with your phone</h2>
+      <p class="hint">Scan with your phone's camera, sign in there, then tap Approve. Nothing to type on this screen.</p>
+      <div class="qr" id="pairQr"></div>
+      <div class="pair-code" id="pairCode"></div>
+      <p class="hint center" id="pairStatus">Can't scan? On your phone go to <b id="pairHost"></b> and type this code.</p>
+      <div class="sheet-actions">
+        <button type="button" class="pill text-btn" id="pairOnScreen">Sign in on this screen instead</button>
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="pairCancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Phone: approve a car sign-in -->
+  <dialog class="sheet narrow" id="approveDialog">
+    <form method="dialog">
+      <h2>Sign in your car?</h2>
+      <div class="pair-code" id="approveCode"></div>
+      <p class="hint">Only approve if this exact code is showing on your car's screen right now. Approving signs that screen in as <b id="approveWho"></b>.</p>
+      <div class="hint error" id="approveError"></div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="approveDeny">Cancel</button>
+        <button type="button" class="pill accent" id="approveOk">Approve</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Phone: enter a car code manually -->
+  <dialog class="sheet narrow" id="enterCodeDialog">
+    <form method="dialog" id="enterCodeForm">
+      <h2>Code from your car</h2>
+      <input name="code" class="code-input" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="enterCodeCancel">Cancel</button>
+        <button type="submit" class="pill accent">Next</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Accept invite / set password -->
+  <dialog class="sheet narrow" id="signupDialog">
+    <form method="dialog" id="signupForm">
+      <h2 id="signupTitle">Join Frunk</h2>
+      <p class="hint" id="signupIntro"></p>
+      <a class="google-btn" id="signupGoogle" href="/auth/google" hidden>Continue with Google instead</a>
+      <label id="signupNameRow">Your name<input name="name" autocomplete="name" maxlength="60"></label>
+      <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <div class="hint error" id="signupError"></div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="signupCancel">Cancel</button>
+        <button type="submit" class="pill accent" id="signupSubmit">Create account</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Account menu -->
+  <dialog class="sheet narrow" id="accountDialog">
+    <form method="dialog">
+      <div class="account-head">
+        <h2 id="accountName"></h2>
+        <button type="button" class="pill small" id="renameBtn">Edit name</button>
+      </div>
+      <p class="hint" id="accountEmail"></p>
+      <div class="menu">
+        <button type="button" class="pill" id="editDefaultBtn" hidden>Edit the public default page</button>
+        <button type="button" class="pill" id="peopleBtn" hidden>People &amp; invites</button>
+        <button type="button" class="pill danger" id="signOutBtn">Sign out</button>
+      </div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="submit" class="pill">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Admin: people -->
+  <dialog class="sheet" id="peopleDialog">
+    <form method="dialog" id="inviteForm">
+      <h2>People</h2>
+      <div class="people" id="peopleList"></div>
+      <div class="field-label">Invite someone</div>
+      <div class="invite-row">
+        <input name="email" type="email" placeholder="name@example.com" autocapitalize="off" spellcheck="false">
+        <button type="submit" class="pill accent">Invite</button>
+      </div>
+      <div class="field-label invite-tiles-label">Start them with these tiles <span class="optional">(added to the default page)</span></div>
+      <div class="invite-tiles" id="inviteTiles"></div>
+      <p class="hint" id="inviteHint">They can sign in with Google using that email, or open the invite link to set a password.</p>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="peopleClose">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="/vendor/qrcode.min.js?v=__V__"></script>
+  <script src="/app.js?v=__V__"></script>
+</body>
+</html>
