@@ -1,4 +1,9 @@
-# Frunk
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.svg">
+    <img src="docs/wordmark-light.svg" alt="Frunk" width="295">
+  </picture>
+</h1>
 
 A big-button, fullscreen site launcher for the Tesla in-car browser.
 
