@@ -5,3 +5,5 @@ data
 test
 docker-compose.yml
 .gitignore
+docs
+LICENSE
