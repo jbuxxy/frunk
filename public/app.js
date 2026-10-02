@@ -284,14 +284,48 @@
   // tile, then drag to reorder. Moving before the hold completes scrolls.
   const HOLD_MS = 500;
   const SLOP_PX = 10;
-  let press = null; // { tile, id, x, y, timer, lifted, moved, pointerId }
+  let press = null; // { tile, id, x, y, timer, lifted, moved, pointerId, grabX, grabY }
   let suppressClick = false;
+  const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function endPress() {
     if (!press) return;
     clearTimeout(press.timer);
-    press.tile.classList.remove("lifted", "dragging");
+    press.tile.classList.remove("holding", "lifted", "dragging");
+    press.tile.style.translate = "";
+    grid.classList.remove("reordering");
     press = null;
+  }
+
+  // Where a tile sits in the layout, ignoring any animation offset.
+  function layoutRect(tile) {
+    const g = grid.getBoundingClientRect();
+    return { left: g.left + tile.offsetLeft, top: g.top + tile.offsetTop, width: tile.offsetWidth, height: tile.offsetHeight };
+  }
+
+  // Keep the lifted tile under the finger, wherever its layout slot now is.
+  function followFinger(e) {
+    const r = layoutRect(press.tile);
+    press.tile.style.translate = `${e.clientX - press.grabX - r.left}px ${e.clientY - press.grabY - r.top}px`;
+  }
+
+  // Move a tile in the DOM and slide the others to their new spots (FLIP).
+  function moveTile(tile, target, after) {
+    const others = [...grid.querySelectorAll(".tile:not(.add)")].filter((t) => t !== tile);
+    const before = new Map(others.map((t) => [t, layoutRect(t)]));
+    if (after) target.after(tile);
+    else target.before(tile);
+    if (reduceMotion()) return;
+    for (const t of others) {
+      const a = before.get(t), b = layoutRect(t);
+      const dx = a.left - b.left, dy = a.top - b.top;
+      if (!dx && !dy) continue;
+      t.style.transition = "none";
+      t.style.translate = `${dx}px ${dy}px`;
+      t.getBoundingClientRect(); // apply the start position before animating
+      t.style.transition = "";
+      t.style.translate = "";
+    }
   }
 
   grid.addEventListener("pointerdown", (e) => {
@@ -300,11 +334,17 @@
     if (!tile || e.button > 0) return;
     endPress();
     press = { tile, id: tile.dataset.id, x: e.clientX, y: e.clientY, lifted: false, moved: false, pointerId: e.pointerId };
+    if (editing || me.user) tile.classList.add("holding"); // slowly presses in while held
     press.timer = setTimeout(() => {
       if (!press) return;
+      tile.classList.remove("holding");
       if (editing) {
+        const r = layoutRect(tile);
+        press.grabX = press.x - r.left;
+        press.grabY = press.y - r.top;
         press.lifted = true;
         tile.classList.add("lifted");
+        grid.classList.add("reordering");
         try { tile.setPointerCapture(press.pointerId); } catch {}
       } else if (me.user) {
         const id = press.id;
@@ -329,13 +369,24 @@
     if (!press.moved && dist < SLOP_PX) return;
     press.moved = true;
     press.tile.classList.add("dragging");
-    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest(".tile:not(.add)");
-    if (over && over !== press.tile) {
-      const tiles = [...grid.children];
-      if (tiles.indexOf(over) > tiles.indexOf(press.tile)) over.after(press.tile);
-      else over.before(press.tile);
+    followFinger(e);
+    // Swap with whichever tile's slot the finger is over (by layout, so tiles
+    // that are still sliding don't cause back-and-forth swaps).
+    const tiles = [...grid.querySelectorAll(".tile:not(.add)")];
+    const over = tiles.find((t) => {
+      if (t === press.tile) return false;
+      const r = layoutRect(t);
+      return e.clientX >= r.left && e.clientX <= r.left + r.width && e.clientY >= r.top && e.clientY <= r.top + r.height;
+    });
+    if (over) {
+      moveTile(press.tile, over, tiles.indexOf(over) > tiles.indexOf(press.tile));
+      try { press.tile.setPointerCapture(press.pointerId); } catch {} // moving it in the page drops capture
+      followFinger(e);
     }
   });
+
+  // A mouse drag would otherwise start the browser's own image drag and cancel the press.
+  grid.addEventListener("dragstart", (e) => e.preventDefault());
 
   // Once a tile is lifted, stop the page from scrolling under the finger.
   grid.addEventListener("touchmove", (e) => {
@@ -344,11 +395,21 @@
 
   grid.addEventListener("pointerup", async () => {
     if (!press) return;
-    const { id, lifted, moved } = press;
-    endPress();
-    if (!editing) return; // taps outside edit mode are handled by "click"
-    if (!lifted) return openSiteDialog(id); // quick tap in edit mode = edit
-    if (!moved) return; // lifted and put back down
+    const { id, lifted, moved, tile } = press;
+    if (!editing || !lifted || !moved) {
+      endPress();
+      if (!editing) return; // taps outside edit mode are handled by "click"
+      if (!lifted) return openSiteDialog(id); // quick tap in edit mode = edit
+      return; // lifted and put back down
+    }
+    // Let go: glide into the new slot, then save the order.
+    press = null;
+    grid.classList.remove("reordering");
+    tile.classList.remove("dragging");
+    tile.classList.add("settling");
+    tile.style.translate = "";
+    await new Promise((r) => setTimeout(r, reduceMotion() ? 0 : 220));
+    tile.classList.remove("lifted", "settling");
     const order = [...grid.querySelectorAll(".tile:not(.add)")].map((t) => t.dataset.id);
     await save(order.map((tid) => sites.find((s) => s.id === tid)));
   });

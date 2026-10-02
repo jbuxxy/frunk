@@ -70,6 +70,7 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
 
 /* Tile grid — Theater-style cards */
 .grid {
+  position: relative; /* tiles measure their slots from here while reordering */
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 24px;
@@ -133,15 +134,28 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
 /* Edit mode keeps normal scrolling; a tile only grabs the finger once lifted (held). */
 body.editing .tile:not(.add) { animation: wiggle .3s ease-in-out infinite alternate; }
 .tile { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+/* Long-press: the tile slowly presses in while held (HOLD_MS in app.js)... */
+body.editing .tile.holding { animation: none; }
+.tile.holding { transform: scale(.95); filter: brightness(.92); transition: transform .5s cubic-bezier(.3,0,.2,1), filter .5s; }
+/* ...then pops up when it lifts (edit mode) and follows the finger. */
 .tile.lifted {
-  animation: none !important;
-  transform: scale(1.05);
-  box-shadow: 0 0 0 3px var(--accent), 0 18px 40px rgba(0,0,0,.55);
+  animation: lift-pop .26s cubic-bezier(.3,1.6,.5,1) both !important;
+  transform: scale(1.07);
+  box-shadow: 0 0 0 3px var(--accent), 0 24px 50px rgba(0,0,0,.6);
   z-index: 3;
-  transition: transform .12s, box-shadow .12s;
 }
+.tile.dragging { transition: none; cursor: grabbing; }
+.tile.settling { translate: 0 0; transition: translate .22s cubic-bezier(.2,.8,.2,1); }
+/* Other tiles slide into place as the lifted one moves past them. */
+.tile { transition: transform .12s, filter .15s, translate .22s cubic-bezier(.2,.8,.2,1); }
+.grid.reordering .tile:not(.lifted) { filter: brightness(.85); }
 body.editing .tile:nth-child(2n) { animation-delay: -.15s; }
-.tile.dragging { opacity: .6; animation: none !important; }
+@keyframes lift-pop { from { transform: scale(.95); } to { transform: scale(1.07); } }
+@media (prefers-reduced-motion: reduce) {
+  body.editing .tile:not(.add) { animation: none; }
+  .tile.lifted { animation: none !important; }
+  .tile, .tile.holding, .tile.settling { transition: none; }
+}
 @keyframes wiggle { from { transform: rotate(-.6deg); } to { transform: rotate(.6deg); } }
 
 /* Dialogs */
