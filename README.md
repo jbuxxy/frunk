@@ -8,6 +8,21 @@ Frunk gives the car's browser a home screen of large, Theater-style tiles for th
 sites you use: streaming services, music, your own self-hosted apps. It also gets
 the browser into fullscreen with one tap.
 
+![The Frunk home screen: a three-by-three grid of large streaming-service tiles](docs/screenshots/home.png)
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/sign-in.png" alt="Signing in from the car by scanning a QR code with your phone"></td>
+    <td><img src="docs/screenshots/add-site.png" alt="Adding a tile, with popular sites, logo choices and card colors"></td>
+  </tr>
+  <tr>
+    <td align="center">Sign in with your phone</td>
+    <td align="center">Add a tile</td>
+  </tr>
+</table>
+
+<sub>Screenshots at 1920×1200, the resolution of the Model 3 and Model Y center screen.</sub>
+
 - **Fullscreen.** Tesla's browser goes fullscreen on youtube.com and stays that way
   after you leave. The first time you tap a tile in the car, Frunk offers to route
   you through `youtube.com/redirect`. You tap "Go to site" once, land back on Frunk
