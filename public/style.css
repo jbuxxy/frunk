@@ -249,15 +249,22 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 
 .edit-banner.public { background: color-mix(in srgb, var(--red) 22%, var(--bg)); color: #ffd0d2; }
 
-.people { display: flex; flex-direction: column; gap: 10px; margin-bottom: 26px; max-height: 46vh; overflow-y: auto; }
+.people { display: flex; flex-direction: column; gap: 10px; margin-bottom: 26px; max-height: 46vh; overflow-y: auto; overflow-x: hidden; }
 .person {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px;
   padding: 14px 16px 14px 20px; border-radius: 16px; background: var(--bg);
 }
 .person > div:first-child { flex: 1 1 240px; min-width: 0; }
-.person-name { font-size: 18px; font-weight: 600; }
+.person-name { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
 .person .hint { margin-top: 2px; overflow-wrap: anywhere; }
-.person-actions { display: flex; gap: 8px; flex: none; margin-left: auto; }
+.person-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; min-width: 0; margin-left: auto; }
+@media (max-width: 600px) {
+  /* Phones: actions get their own line under the name, wrapping as needed. */
+  .person { padding: 14px 14px 14px 18px; }
+  .person-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+  .pill.small { min-height: 40px; padding: 0 14px; font-size: 15px; }
+  .badge-pill { margin-left: 8px; }
+}
 .person-actions:empty { display: none; }
 .pill.small { min-height: 44px; padding: 0 16px; font-size: 16px; }
 .pill.small.danger { background: transparent; }
@@ -368,7 +375,7 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 .account-who .hint { margin-top: 4px; }
 .avatar-circle:focus:not(:focus-visible) { outline: none; }
 /* Dialogs open with focus on a non-button element, so no button shows a focus ring. */
-.account-who:focus, #avatarPreview:focus { outline: none; }
+.account-who:focus, #avatarPreview:focus, dialog h2:focus { outline: none; }
 .avatar-circle {
   flex: none; width: 56px; height: 56px; border-radius: 50%; border: 0; padding: 0;
   display: grid; place-items: center; cursor: pointer;
