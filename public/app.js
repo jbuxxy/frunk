@@ -440,79 +440,87 @@
   // ---------- Accounts ----------
   let me = { user: null, google: false };
 
-  // ---------- Icon color ----------
-  // The Frunk logo's highlighted tile can be any color, per account. The logo
-  // in the top bar and the browser tab icon are the stock SVG, recolored.
-  const ICON_RED = "#de2d30";
-  const ICON_COLORS = [ICON_RED, ...PALETTE.filter((c) => c !== "#e82127")];
-  let iconSvg = null;
-  let iconColor = store.get("frunk-icon-color") || ICON_RED;
+  // ---------- Profile circle color ----------
+  // Each person picks the color of their initial circle (top bar + account menu).
+  const AVATAR_DEFAULT = PALETTE[0];
+  const avatarColor = () => (me.user && me.user.avatarColor) || AVATAR_DEFAULT;
 
-  async function iconUrl(color) {
-    if (color === ICON_RED) return "/icon.svg";
-    iconSvg ||= await fetch("/icon.svg").then((r) => r.text());
-    return `data:image/svg+xml,${encodeURIComponent(iconSvg.replace(/#de2d30/gi, color))}`;
+  function paintAvatar(el, color, name = me.user && (me.user.name || me.user.email)) {
+    el.style.background = color;
+    el.style.color = luminance(color) > 0.6 ? "#111" : "#fff";
+    el.textContent = String(name || "?").trim().charAt(0).toUpperCase() || "?";
   }
 
-  // preview: only the account dialog's sample; otherwise the real logo + tab icon.
-  async function showIconColor(color, preview = false) {
-    const url = await iconUrl(color);
-    $("iconPreview").src = url;
-    if (preview) return;
-    document.querySelector(".brand img").src = url;
-    document.querySelector("link[rel=icon]").href = url;
-  }
-
-  async function setIconColor(color) {
-    const prev = iconColor;
-    iconColor = color;
-    renderIconSwatches();
-    showIconColor(color);
-    try {
-      me.user = await api("/api/me", { method: "PUT", body: JSON.stringify({ iconColor: color === ICON_RED ? null : color }) });
-      store.set("frunk-icon-color", color);
-    } catch (err) {
-      iconColor = prev;
-      renderIconSwatches();
-      showIconColor(prev);
-      toast(`Couldn't save: ${err.message}`);
-    }
-  }
-
-  function renderIconSwatches() {
-    const box = $("iconSwatches");
+  // Preset swatches plus a color wheel. onPick(color) fires live, wheel included.
+  function renderColorSwatches(box, selected, onPick) {
     box.replaceChildren();
-    for (const color of ICON_COLORS) {
+    for (const color of PALETTE) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "swatch" + (color === iconColor ? " on" : "");
+      b.className = "swatch" + (color === selected ? " on" : "");
       b.style.background = color;
-      b.setAttribute("aria-label", color === ICON_RED ? "Frunk red (default)" : `Icon color ${color}`);
-      b.onclick = () => setIconColor(color);
+      b.setAttribute("aria-label", `Color ${color}`);
+      b.onclick = () => {
+        box.querySelectorAll(".swatch.on").forEach((x) => x.classList.remove("on"));
+        b.classList.add("on");
+        onPick(color);
+      };
       box.append(b);
     }
-    const custom = !ICON_COLORS.includes(iconColor);
+    const custom = !PALETTE.includes(selected);
     const wheel = document.createElement("label");
     wheel.className = "swatch wheel" + (custom ? " on" : "");
     wheel.setAttribute("aria-label", "Pick any color");
-    if (custom) wheel.style.setProperty("--picked", iconColor);
+    if (custom) wheel.style.setProperty("--picked", selected);
     const input = document.createElement("input");
     input.type = "color";
-    input.value = iconColor;
-    input.oninput = () => showIconColor(input.value, true); // live preview while dragging
-    input.onchange = () => setIconColor(input.value);
+    input.value = selected;
+    // Live while dragging; nothing is rebuilt, so the native picker stays open.
+    input.oninput = () => {
+      box.querySelectorAll(".swatch.on").forEach((x) => x.classList.remove("on"));
+      wheel.classList.add("on");
+      wheel.style.setProperty("--picked", input.value);
+      onPick(input.value);
+    };
     wheel.append(input);
     box.append(wheel);
   }
 
-  if (iconColor !== ICON_RED) showIconColor(iconColor); // remembered color, before sign-in loads
+  const avatarDialog = $("avatarDialog");
+  let avatarPicked = null;
+  // welcome: the one-time "pick your color" after a new account's first sign-in.
+  function openAvatarPicker(welcome = false) {
+    avatarPicked = avatarColor();
+    $("avatarTitle").textContent = welcome ? "Pick your color" : "Your color";
+    $("avatarIntro").hidden = !welcome;
+    $("avatarCancel").textContent = welcome ? "Skip" : "Cancel";
+    $("avatarCancel").onclick = welcome ? () => saveAvatar(AVATAR_DEFAULT) : () => avatarDialog.close();
+    paintAvatar($("avatarPreview"), avatarPicked);
+    renderColorSwatches($("avatarSwatches"), avatarPicked, (c) => {
+      avatarPicked = c;
+      paintAvatar($("avatarPreview"), c);
+    });
+    avatarDialog.showModal();
+  }
+
+  async function saveAvatar(color) {
+    try {
+      me.user = await api("/api/me", { method: "PUT", body: JSON.stringify({ avatarColor: color === AVATAR_DEFAULT ? null : color }) });
+      avatarDialog.close();
+      renderAccount();
+      paintAvatar($("accountAvatar"), avatarColor());
+    } catch (err) {
+      toast(`Couldn't save: ${err.message}`);
+    }
+  }
+  $("avatarSave").onclick = () => saveAvatar(avatarPicked);
 
   function renderAccount() {
     const u = me.user;
     $("signInBtn").hidden = !!u;
     $("accountBtn").hidden = !u;
     $("editBtn").hidden = !u;
-    if (u) $("accountBtn").textContent = (u.name || u.email).trim().charAt(0).toUpperCase();
+    if (u) paintAvatar($("accountBtn"), avatarColor());
   }
 
   const signInDialog = $("signInDialog");
@@ -620,10 +628,10 @@
     $("accountEmail").textContent = me.user.email;
     $("editDefaultBtn").hidden = !me.user.admin;
     $("peopleBtn").hidden = !me.user.admin;
-    renderIconSwatches();
-    showIconColor(iconColor, true);
+    paintAvatar($("accountAvatar"), avatarColor());
     accountDialog.showModal();
   };
+  $("accountAvatar").onclick = () => openAvatarPicker();
   // Your name shows in the account menu and as "<name> via Frunk" on invite emails.
   $("renameBtn").onclick = async () => {
     const name = prompt("Your name (shown on invites you send):", me.user.name);
@@ -638,7 +646,6 @@
   };
   $("signOutBtn").onclick = async () => {
     await api("/api/logout", { method: "POST" }).catch(() => {});
-    store.del("frunk-icon-color");
     location.replace("/");
   };
   $("editDefaultBtn").onclick = async () => {
@@ -668,6 +675,13 @@
       ? `Choose a new password for ${info.email}.`
       : `You've been invited as ${info.email}. Pick a password, or sign in with Google using that address.`;
     $("signupNameRow").hidden = info.existing;
+    $("signupColorRow").hidden = info.existing;
+    let signupColor = AVATAR_DEFAULT;
+    const nameField = $("signupForm").name;
+    const paintSignup = () => paintAvatar($("signupAvatar"), signupColor, nameField.value || info.email);
+    nameField.oninput = paintSignup;
+    renderColorSwatches($("signupSwatches"), signupColor, (c) => { signupColor = c; paintSignup(); });
+    paintSignup();
     $("signupGoogle").hidden = !me.google || info.existing;
     $("signupSubmit").textContent = info.existing ? "Save password" : "Create account";
     signupDialog.showModal();
@@ -676,7 +690,7 @@
       e.preventDefault();
       const f = e.target;
       try {
-        await api("/api/signup", { method: "POST", body: JSON.stringify({ token, name: f.name.value, password: f.password.value }) });
+        await api("/api/signup", { method: "POST", body: JSON.stringify({ token, name: f.name.value, password: f.password.value, avatarColor: signupColor }) });
         location.replace("/");
       } catch (err) {
         $("signupError").textContent = err.message;
@@ -1329,13 +1343,10 @@
   (async () => {
     me = await api("/api/me").catch(() => me);
     renderAccount();
-    const saved = (me.user && me.user.iconColor) || ICON_RED;
-    if (saved !== iconColor) {
-      iconColor = saved;
-      showIconColor(saved);
-    }
-    if (saved === ICON_RED) store.del("frunk-icon-color");
-    else store.set("frunk-icon-color", saved);
+    // New account that hasn't chosen a color yet (Google sign-up skips the form).
+    // Not mid-way through approving a car or an invite; it'll ask next visit.
+    const busy = location.pathname === "/pair" || /[?&](pair|invite|open)=/.test(location.search) || store.sget("frunk-pair");
+    if (me.user && me.user.pickColor && !busy) openAvatarPicker(true);
     try {
       sites = await api("/api/sites");
       render();

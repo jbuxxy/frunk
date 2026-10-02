@@ -56,12 +56,24 @@ test("odd email addresses are refused", () => {
   }
 });
 
-test("icon color: hex only, null resets to default", async () => {
+test("profile color: hex only, null resets to default", async () => {
   const a = fresh();
   const { user } = await a.acceptInvite(a.createInvite("c@example.com").token, { password: "colorful1" }, []);
-  assert.ok(a.setIconColor(user, "#3E6AE1"));
-  assert.equal(user.iconColor, "#3e6ae1");
-  for (const bad of ["red", "#fff", "#12345g", "url(x)", 7]) assert.equal(a.setIconColor(user, bad), false, String(bad));
-  assert.ok(a.setIconColor(user, null));
-  assert.equal(user.iconColor, undefined);
+  assert.ok(a.setAvatarColor(user, "#3E6AE1"));
+  assert.equal(user.avatarColor, "#3e6ae1");
+  for (const bad of ["red", "#fff", "#12345g", "url(x)", 7]) assert.equal(a.setAvatarColor(user, bad), false, String(bad));
+  assert.ok(a.setAvatarColor(user, null));
+  assert.equal(user.avatarColor, undefined);
+});
+
+test("new accounts pick a color: on the sign-up form, or once after Google sign-up", async () => {
+  const a = fresh();
+  const { user: pw } = await a.acceptInvite(a.createInvite("pw@example.com").token, { password: "longenough", avatarColor: "#9146FF" }, []);
+  assert.equal(pw.avatarColor, "#9146ff");
+  assert.equal(pw.pickColor, undefined);
+  a.createInvite("g@example.com");
+  const { user: g } = a.signInWithGoogle({ sub: "g", email: "g@example.com", emailVerified: true }, []);
+  assert.equal(g.pickColor, true);
+  a.setAvatarColor(g, null); // "Skip" keeps the default and stops asking
+  assert.equal(g.pickColor, undefined);
 });

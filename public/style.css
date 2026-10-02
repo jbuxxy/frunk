@@ -362,14 +362,25 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 .person.expired { box-shadow: inset 4px 0 0 #e82127; }
 .person.expired .person-name { color: var(--muted); }
 
-.account-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.account-head h2 { margin-bottom: 0; }
+.account-head { display: flex; align-items: center; gap: 16px; }
+.account-head h2 { margin-bottom: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 #accountEmail { margin-top: 6px; }
-.icon-color { display: flex; align-items: center; gap: 16px; margin: 4px 0 18px; }
-.icon-color img { flex: none; border-radius: 14px; }
-.icon-color .hint { margin: 0 0 8px; }
-.icon-color .swatches { margin-bottom: 0; gap: 8px; }
-.icon-color .swatch { width: 38px; height: 38px; border-radius: 10px; }
+.avatar-circle {
+  flex: none; width: 56px; height: 56px; border-radius: 50%; border: 0; padding: 0;
+  display: grid; place-items: center; cursor: pointer;
+  font-family: var(--display); font-size: 26px; font-weight: 700;
+  background: var(--accent); color: #fff;
+  box-shadow: 0 0 0 3px #181b20, 0 0 0 5px rgba(255,255,255,.18);
+}
+.avatar-circle:active { filter: brightness(.9); }
+.avatar-circle.big { width: 96px; height: 96px; font-size: 44px; margin: 0 auto 16px; cursor: default; }
+#avatarDialog h2, #avatarIntro { text-align: center; }
+.color-row { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.color-row .avatar-circle { cursor: default; }
+.color-row .swatches { margin-bottom: 0; gap: 8px; }
+.color-row .swatch { width: 38px; height: 38px; border-radius: 10px; }
+.field-label { margin-bottom: 8px; font-size: 17px; color: var(--muted); font-weight: 500; }
+#avatarDialog .swatches { justify-content: center; }
 
 /* Live preview of the tile being edited */
 .preview-wrap { display: flex; justify-content: center; margin: -6px 0 22px; }

@@ -721,7 +721,7 @@ const server = http.createServer(async (req, res) => {
     // ---------- Sign-in ----------
     if (route("GET", "/api/me")) {
       return json(res, 200, {
-        user: user && { name: user.name, email: user.email, admin: !!user.admin, iconColor: user.iconColor || null },
+        user: user && { name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null, pickColor: !!user.pickColor },
         google: !!(GOOGLE_ID && GOOGLE_SECRET),
         googleClientId: GOOGLE_ID || undefined,
       });
@@ -799,8 +799,8 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { email: invite.email, existing: !!accounts.byEmail(invite.email) });
     }
     if (route("POST", "/api/signup")) {
-      const { token, name, password } = (await readBody(req)) || {};
-      const result = await accounts.acceptInvite(String(token || ""), { name, password: String(password || "") }, readSites());
+      const { token, name, password, avatarColor } = (await readBody(req)) || {};
+      const result = await accounts.acceptInvite(String(token || ""), { name, password: String(password || ""), avatarColor }, readSites());
       if (result.error) return json(res, 400, { error: result.error });
       startSession(res, req, result.user);
       return json(res, 200, { ok: true });
@@ -878,8 +878,8 @@ const server = http.createServer(async (req, res) => {
     if (route("PUT", "/api/me")) {
       const body = (await readBody(req)) || {};
       if ("name" in body && !accounts.setName(user, body.name)) return json(res, 400, { error: "Enter a name." });
-      if ("iconColor" in body && !accounts.setIconColor(user, body.iconColor)) return json(res, 400, { error: "Pick a color like #3e6ae1." });
-      return json(res, 200, { name: user.name, email: user.email, admin: !!user.admin, iconColor: user.iconColor || null });
+      if ("avatarColor" in body && !accounts.setAvatarColor(user, body.avatarColor)) return json(res, 400, { error: "Pick a color like #3e6ae1." });
+      return json(res, 200, { name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null });
     }
     if (route("PUT", "/api/sites") || route("PUT", "/api/default")) {
       const isDefault = pathname === "/api/default";

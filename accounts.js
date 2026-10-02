@@ -31,6 +31,15 @@ function createAccounts({ dataDir, ownerEmail }) {
     fs.renameSync(tmp, FILE);
   }
 
+  // An early build stored the profile color as iconColor.
+  if (db.users.some((u) => u.iconColor)) {
+    for (const u of db.users) {
+      if (u.iconColor) u.avatarColor ||= u.iconColor;
+      delete u.iconColor;
+    }
+    save();
+  }
+
   const norm = (email) => String(email || "").trim().toLowerCase();
   const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
   const byEmail = (email) => db.users.find((u) => u.email === norm(email));
@@ -70,6 +79,7 @@ function createAccounts({ dataDir, ownerEmail }) {
       name: String(name || "").trim().slice(0, 60) || norm(email).split("@")[0],
       admin: norm(email) === owner,
       created: new Date().toISOString(),
+      pickColor: true, // asked to pick a profile color on first sign-in
       // Fresh ids so icon lookups never confuse a user's tile with the default page's.
       sites: (sites || []).map((s) => ({ ...s, id: crypto.randomUUID() })),
     };
@@ -170,7 +180,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   }
 
   // Create an account (or reset a password) from an invite link.
-  async function acceptInvite(token, { name, password }, defaultSites) {
+  async function acceptInvite(token, { name, password, avatarColor }, defaultSites) {
     const invite = findInvite(token);
     if (!invite) return { error: "This invite link has expired or was already used." };
     password = String(password || "");
@@ -180,7 +190,10 @@ function createAccounts({ dataDir, ownerEmail }) {
     if (!findInvite(token)) return { error: "This invite link has expired or was already used." };
     let user = byEmail(invite.email);
     if (user) endUserSessions(user.id); // a password reset signs out everywhere else
-    else user = newUser({ email: invite.email, name, sites: startingTiles(invite.email, defaultSites) });
+    else {
+      user = newUser({ email: invite.email, name, sites: startingTiles(invite.email, defaultSites) });
+      setAvatarColor(user, /^#[0-9a-f]{6}$/i.test(String(avatarColor)) ? avatarColor : null); // chosen on the sign-up form
+    }
     user.password = hash;
     deleteInvite(token);
     save();
@@ -243,11 +256,12 @@ function createAccounts({ dataDir, ownerEmail }) {
     return true;
   }
 
-  // Highlight color of the Frunk logo for this person; null = the default red.
-  function setIconColor(user, color) {
+  // Color of this person's profile circle; null = the default.
+  function setAvatarColor(user, color) {
     if (color !== null && !/^#[0-9a-f]{6}$/i.test(String(color))) return false;
-    if (color) user.iconColor = color.toLowerCase();
-    else delete user.iconColor;
+    if (color) user.avatarColor = color.toLowerCase();
+    else delete user.avatarColor;
+    delete user.pickColor;
     save();
     return true;
   }
@@ -262,7 +276,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   return {
     ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
-    people, deleteUser, setSites, setName, setIconColor, allUsers,
+    people, deleteUser, setSites, setName, setAvatarColor, allUsers,
   };
 }
 

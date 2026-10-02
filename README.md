@@ -1,8 +1,5 @@
 <h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.svg">
-    <img src="docs/wordmark-light.svg" alt="Frunk" width="295">
-  </picture>
+  <img src="docs/wordmark.svg" alt="Frunk" width="360">
 </h1>
 
 A big-button, fullscreen site launcher for the Tesla in-car browser.
@@ -23,8 +20,8 @@ the browser into fullscreen with one tap.
   [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons) and
   [Simple Icons](https://simpleicons.org). You can also pick another logo or color.
   Hold a tile for its menu; in edit mode, hold and drag to reorder.
-- **Your own icon color.** Each person can recolor the highlighted tile in the
-  Frunk logo from their account menu.
+- **Your own color.** Each person picks the color of their profile circle by
+  tapping it in their account menu.
 - **Accounts.** Invite-only. People sign in with Google or a password, and each
   person has their own page. Signed-out visitors see a default page that the admin
   edits.

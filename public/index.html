@@ -179,6 +179,13 @@
       <a class="google-btn" id="signupGoogle" href="/auth/google" hidden>Continue with Google instead</a>
       <label id="signupNameRow">Your name<input name="name" autocomplete="name" maxlength="60"></label>
       <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <div class="color-row" id="signupColorRow">
+        <div class="avatar-circle" id="signupAvatar" aria-hidden="true"></div>
+        <div>
+          <div class="field-label">Your color</div>
+          <div class="swatches" id="signupSwatches"></div>
+        </div>
+      </div>
       <div class="hint error" id="signupError"></div>
       <div class="sheet-actions">
         <span class="spacer"></span>
@@ -192,17 +199,11 @@
   <dialog class="sheet narrow" id="accountDialog">
     <form method="dialog">
       <div class="account-head">
+        <button type="button" class="avatar-circle" id="accountAvatar" aria-label="Change your color"></button>
         <h2 id="accountName"></h2>
         <button type="button" class="pill small" id="renameBtn">Edit name</button>
       </div>
       <p class="hint" id="accountEmail"></p>
-      <div class="icon-color">
-        <img id="iconPreview" src="/icon.svg" alt="" width="56" height="56">
-        <div>
-          <div class="hint">Icon color</div>
-          <div class="swatches" id="iconSwatches"></div>
-        </div>
-      </div>
       <div class="menu">
         <button type="button" class="pill" id="editDefaultBtn" hidden>Edit the public default page</button>
         <button type="button" class="pill" id="peopleBtn" hidden>People &amp; invites</button>
@@ -211,6 +212,21 @@
       <div class="sheet-actions">
         <span class="spacer"></span>
         <button type="submit" class="pill">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Color of your profile circle -->
+  <dialog class="sheet narrow" id="avatarDialog">
+    <form method="dialog">
+      <div class="avatar-circle big" id="avatarPreview" aria-hidden="true"></div>
+      <h2 id="avatarTitle">Your color</h2>
+      <p class="hint" id="avatarIntro" hidden>Pick a color for your profile circle. You can change it any time from your account menu.</p>
+      <div class="swatches" id="avatarSwatches"></div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="avatarCancel">Cancel</button>
+        <button type="button" class="pill accent" id="avatarSave" autofocus>Save</button>
       </div>
     </form>
   </dialog>
