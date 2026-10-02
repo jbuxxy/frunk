@@ -291,6 +291,7 @@
   function endPress() {
     if (!press) return;
     clearTimeout(press.timer);
+    cancelAnimationFrame(press.scrollFrame);
     press.tile.classList.remove("holding", "lifted", "dragging");
     press.tile.style.translate = "";
     grid.classList.remove("reordering");
@@ -358,6 +359,44 @@
     }, HOLD_MS);
   });
 
+  // Drag the lifted tile to a screen point: follow it, and swap with whichever
+  // tile's slot is under it (by layout, so tiles that are still sliding don't
+  // cause back-and-forth swaps).
+  function dragTo(pt) {
+    followFinger(pt);
+    const tiles = [...grid.querySelectorAll(".tile:not(.add)")];
+    const over = tiles.find((t) => {
+      if (t === press.tile) return false;
+      const r = layoutRect(t);
+      return pt.clientX >= r.left && pt.clientX <= r.left + r.width && pt.clientY >= r.top && pt.clientY <= r.top + r.height;
+    });
+    if (over) {
+      moveTile(press.tile, over, tiles.indexOf(over) > tiles.indexOf(press.tile));
+      try { press.tile.setPointerCapture(press.pointerId); } catch {} // moving it in the page drops capture
+      followFinger(pt);
+    }
+  }
+
+  // Holding a dragged tile near the top or bottom edge scrolls the page,
+  // faster the closer it gets, even while the finger stays still.
+  const EDGE_PX = 90;
+  const MAX_SCROLL_PX = 18; // per frame
+  function autoScroll() {
+    if (!press || !press.dragPoint) return;
+    const y = press.dragPoint.clientY;
+    const scroller = document.scrollingElement;
+    let step = 0;
+    if (y > innerHeight - EDGE_PX) step = (y - (innerHeight - EDGE_PX)) / EDGE_PX;
+    else if (y < EDGE_PX) step = -(EDGE_PX - y) / EDGE_PX;
+    step = Math.round(Math.max(-1, Math.min(1, step)) * MAX_SCROLL_PX);
+    if (step) {
+      const before = scroller.scrollTop;
+      scroller.scrollTop += step;
+      if (scroller.scrollTop !== before) dragTo(press.dragPoint);
+    }
+    press.scrollFrame = requestAnimationFrame(autoScroll);
+  }
+
   grid.addEventListener("pointermove", (e) => {
     if (!press) return;
     const dist = Math.hypot(e.clientX - press.x, e.clientY - press.y);
@@ -367,22 +406,11 @@
       return;
     }
     if (!press.moved && dist < SLOP_PX) return;
+    if (!press.moved) press.scrollFrame = requestAnimationFrame(autoScroll);
     press.moved = true;
     press.tile.classList.add("dragging");
-    followFinger(e);
-    // Swap with whichever tile's slot the finger is over (by layout, so tiles
-    // that are still sliding don't cause back-and-forth swaps).
-    const tiles = [...grid.querySelectorAll(".tile:not(.add)")];
-    const over = tiles.find((t) => {
-      if (t === press.tile) return false;
-      const r = layoutRect(t);
-      return e.clientX >= r.left && e.clientX <= r.left + r.width && e.clientY >= r.top && e.clientY <= r.top + r.height;
-    });
-    if (over) {
-      moveTile(press.tile, over, tiles.indexOf(over) > tiles.indexOf(press.tile));
-      try { press.tile.setPointerCapture(press.pointerId); } catch {} // moving it in the page drops capture
-      followFinger(e);
-    }
+    press.dragPoint = { clientX: e.clientX, clientY: e.clientY };
+    dragTo(press.dragPoint);
   });
 
   // A mouse drag would otherwise start the browser's own image drag and cancel the press.
@@ -403,6 +431,7 @@
       return; // lifted and put back down
     }
     // Let go: glide into the new slot, then save the order.
+    cancelAnimationFrame(press.scrollFrame);
     press = null;
     grid.classList.remove("reordering");
     tile.classList.remove("dragging");
