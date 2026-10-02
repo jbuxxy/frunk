@@ -968,6 +968,8 @@
         mark.style.background = cardColors(t).fg;
         mark.style.webkitMaskImage = mark.style.maskImage = `url(/api/logo/${t.art.slug})`;
         b.append(mark);
+      } else {
+        b.append(tileArt(t, "#fff", null)); // the site's own icon, like on the main page
       }
       const label = document.createElement("span");
       label.textContent = t.name;

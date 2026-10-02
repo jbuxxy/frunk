@@ -351,6 +351,12 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 }
 .invite-tile.on { opacity: 1; box-shadow: 0 0 0 3px #181b20, 0 0 0 6px var(--text); }
 .invite-tile img { width: 60%; height: 55%; object-fit: contain; }
+.invite-tile .app-icon {
+  height: 55%; aspect-ratio: 1; display: grid; place-items: center; border-radius: 24%;
+  background: rgba(255,255,255,.18); font-size: 22px; font-weight: 700; color: #fff; overflow: hidden;
+}
+.invite-tile .app-icon.loaded { background: #fff; }
+.invite-tile .app-icon img { width: 74%; height: 74%; object-fit: contain; border-radius: 14%; }
 .invite-tile .mini-mark { width: 60%; height: 50%; -webkit-mask: center / contain no-repeat; mask: center / contain no-repeat; }
 .invite-tile span {
   font-family: var(--display); font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
