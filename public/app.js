@@ -1271,7 +1271,14 @@
     const q = new URLSearchParams(location.search);
     if (q.get("signin_error")) {
       history.replaceState(null, "", "/");
-      openSignIn(q.get("signin_error"), store.sget("frunk-pair") ? "Sign in on this phone to approve your car." : "");
+      const why = {
+        cancelled: "Google sign-in was cancelled.",
+        expired: "Google sign-in took too long, try again.",
+        not_invited: "That Google account hasn't been invited to Frunk.",
+        unverified: "Your Google email isn't verified.",
+        not_setup: "Google sign-in isn't set up.",
+      }[q.get("signin_error")] || "Google sign-in failed, try again.";
+      openSignIn(why, store.sget("frunk-pair") ? "Sign in on this phone to approve your car." : "");
     } else if (location.pathname === "/pair" || q.get("pair") || store.sget("frunk-pair")) {
       // "?" = no code yet: ask for it once signed in (typed-in fallback for no camera).
       const code = q.get("pair") || store.sget("frunk-pair") || "?";

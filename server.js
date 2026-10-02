@@ -598,18 +598,20 @@ function redirect(res, location) {
 }
 
 async function googleCallback(req, res, params) {
-  const fail = (msg, why = msg) => {
+  // Only a short code goes in the address; the page has the wording, so a
+  // crafted link can't put arbitrary text in the sign-in box.
+  const fail = (code, why = code) => {
     console.warn(`Google sign-in failed (${clientIp(req)}): ${why}`);
-    return redirect(res, `/?signin_error=${encodeURIComponent(msg)}`);
+    return redirect(res, `/?signin_error=${code}`);
   };
-  if (params.get("error")) return fail("Google sign-in was cancelled.", `google returned ${params.get("error")}`);
+  if (params.get("error")) return fail("cancelled", `google returned ${params.get("error")}`);
   // Several attempts can be in flight (tapped twice, page reloaded while
   // approving on the phone), so the cookie keeps the last few states.
   const states = String(cookies(req).frunk_oauth || "").split(".").filter(Boolean);
   const state = params.get("state");
-  if (!params.get("code")) return fail("Google sign-in failed, try again.", "no code");
-  if (!states.length) return fail("Google sign-in took too long, try again.", "no state cookie (expired or blocked)");
-  if (!states.includes(state)) return fail("Google sign-in took too long, try again.", "state not among recent attempts");
+  if (!params.get("code")) return fail("failed", "no code");
+  if (!states.length) return fail("expired", "no state cookie (expired or blocked)");
+  if (!states.includes(state)) return fail("expired", "state not among recent attempts");
   setCookie(res, req, "frunk_oauth", "", 0);
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -624,18 +626,18 @@ async function googleCallback(req, res, params) {
     signal: AbortSignal.timeout(10_000),
   });
   const tokens = await tokenRes.json().catch(() => ({}));
-  if (!tokenRes.ok || !tokens.id_token) return fail("Google sign-in failed, try again.", `token exchange ${tokenRes.status} ${tokens.error || ""}`);
+  if (!tokenRes.ok || !tokens.id_token) return fail("failed", `token exchange ${tokenRes.status} ${tokens.error || ""}`);
   // The ID token came straight from Google's token endpoint over TLS, so its
   // claims can be read directly; still check it was issued for this app.
   const claims = JSON.parse(Buffer.from(tokens.id_token.split(".")[1], "base64url").toString());
   if (claims.aud !== GOOGLE_ID || !["accounts.google.com", "https://accounts.google.com"].includes(claims.iss)) {
-    return fail("Google sign-in failed, try again.", `bad token aud/iss ${claims.aud} ${claims.iss}`);
+    return fail("failed", `bad token aud/iss ${claims.aud} ${claims.iss}`);
   }
   const result = accounts.signInWithGoogle(
     { sub: claims.sub, email: claims.email, emailVerified: claims.email_verified === true || claims.email_verified === "true", name: claims.name },
     readSites()
   );
-  if (result.error) return fail(result.error, `${claims.email}: ${result.error}`);
+  if (result.error) return fail(result.code, `${claims.email}: ${result.error}`);
   console.log(`Google sign-in: ${result.user.email}`);
   startSession(res, req, result.user);
   redirect(res, "/");
@@ -725,7 +727,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (route("GET", "/auth/google")) {
-      if (!GOOGLE_ID) return redirect(res, "/?signin_error=Google%20sign-in%20isn%27t%20set%20up");
+      if (!GOOGLE_ID) return redirect(res, "/?signin_error=not_setup");
       const state = crypto.randomBytes(16).toString("base64url");
       // 30 min: phone 2-step prompts can take a while (resend, unlock, app opens first).
       const recent = String(cookies(req).frunk_oauth || "").split(".").filter(Boolean).slice(-4);

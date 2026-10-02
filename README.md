@@ -121,3 +121,7 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 **Admin powers**
 - The admin can reset any member's password, because a reset is an invite link
   the admin can see.
+
+## License
+
+[MIT](LICENSE)

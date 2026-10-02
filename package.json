@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Big-button fullscreen launcher for the Tesla browser",
   "private": true,
+  "license": "MIT",
   "main": "server.js",
   "engines": {
     "node": ">=22"

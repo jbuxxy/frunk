@@ -142,10 +142,10 @@ function createAccounts({ dataDir, ownerEmail }) {
 
   // ---------- Sign-in paths ----------
   function signInWithGoogle({ sub, email, emailVerified, name }, defaultSites) {
-    if (!emailVerified) return { error: "Your Google email isn't verified." };
+    if (!emailVerified) return { error: "Your Google email isn't verified.", code: "unverified" };
     let user = db.users.find((u) => u.google === sub) || byEmail(email);
     if (!user) {
-      if (!isAllowed(email)) return { error: `${email} hasn't been invited to Frunk.` };
+      if (!isAllowed(email)) return { error: `${email} hasn't been invited to Frunk.`, code: "not_invited" };
       user = newUser({ email, name, sites: startingTiles(email, defaultSites) });
     }
     if (!user.google) { user.google = sub; save(); }
