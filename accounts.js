@@ -243,6 +243,15 @@ function createAccounts({ dataDir, ownerEmail }) {
     return true;
   }
 
+  // Highlight color of the Frunk logo for this person; null = the default red.
+  function setIconColor(user, color) {
+    if (color !== null && !/^#[0-9a-f]{6}$/i.test(String(color))) return false;
+    if (color) user.iconColor = color.toLowerCase();
+    else delete user.iconColor;
+    save();
+    return true;
+  }
+
   function setSites(user, sites) {
     user.sites = sites;
     save();
@@ -253,7 +262,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   return {
     ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
-    people, deleteUser, setSites, setName, allUsers,
+    people, deleteUser, setSites, setName, setIconColor, allUsers,
   };
 }
 

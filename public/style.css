@@ -365,6 +365,11 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 .account-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .account-head h2 { margin-bottom: 0; }
 #accountEmail { margin-top: 6px; }
+.icon-color { display: flex; align-items: center; gap: 16px; margin: 4px 0 18px; }
+.icon-color img { flex: none; border-radius: 14px; }
+.icon-color .hint { margin: 0 0 8px; }
+.icon-color .swatches { margin-bottom: 0; gap: 8px; }
+.icon-color .swatch { width: 38px; height: 38px; border-radius: 10px; }
 
 /* Live preview of the tile being edited */
 .preview-wrap { display: flex; justify-content: center; margin: -6px 0 22px; }

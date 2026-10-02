@@ -440,6 +440,73 @@
   // ---------- Accounts ----------
   let me = { user: null, google: false };
 
+  // ---------- Icon color ----------
+  // The Frunk logo's highlighted tile can be any color, per account. The logo
+  // in the top bar and the browser tab icon are the stock SVG, recolored.
+  const ICON_RED = "#de2d30";
+  const ICON_COLORS = [ICON_RED, ...PALETTE.filter((c) => c !== "#e82127")];
+  let iconSvg = null;
+  let iconColor = store.get("frunk-icon-color") || ICON_RED;
+
+  async function iconUrl(color) {
+    if (color === ICON_RED) return "/icon.svg";
+    iconSvg ||= await fetch("/icon.svg").then((r) => r.text());
+    return `data:image/svg+xml,${encodeURIComponent(iconSvg.replace(/#de2d30/gi, color))}`;
+  }
+
+  // preview: only the account dialog's sample; otherwise the real logo + tab icon.
+  async function showIconColor(color, preview = false) {
+    const url = await iconUrl(color);
+    $("iconPreview").src = url;
+    if (preview) return;
+    document.querySelector(".brand img").src = url;
+    document.querySelector("link[rel=icon]").href = url;
+  }
+
+  async function setIconColor(color) {
+    const prev = iconColor;
+    iconColor = color;
+    renderIconSwatches();
+    showIconColor(color);
+    try {
+      me.user = await api("/api/me", { method: "PUT", body: JSON.stringify({ iconColor: color === ICON_RED ? null : color }) });
+      store.set("frunk-icon-color", color);
+    } catch (err) {
+      iconColor = prev;
+      renderIconSwatches();
+      showIconColor(prev);
+      toast(`Couldn't save: ${err.message}`);
+    }
+  }
+
+  function renderIconSwatches() {
+    const box = $("iconSwatches");
+    box.replaceChildren();
+    for (const color of ICON_COLORS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "swatch" + (color === iconColor ? " on" : "");
+      b.style.background = color;
+      b.setAttribute("aria-label", color === ICON_RED ? "Frunk red (default)" : `Icon color ${color}`);
+      b.onclick = () => setIconColor(color);
+      box.append(b);
+    }
+    const custom = !ICON_COLORS.includes(iconColor);
+    const wheel = document.createElement("label");
+    wheel.className = "swatch wheel" + (custom ? " on" : "");
+    wheel.setAttribute("aria-label", "Pick any color");
+    if (custom) wheel.style.setProperty("--picked", iconColor);
+    const input = document.createElement("input");
+    input.type = "color";
+    input.value = iconColor;
+    input.oninput = () => showIconColor(input.value, true); // live preview while dragging
+    input.onchange = () => setIconColor(input.value);
+    wheel.append(input);
+    box.append(wheel);
+  }
+
+  if (iconColor !== ICON_RED) showIconColor(iconColor); // remembered color, before sign-in loads
+
   function renderAccount() {
     const u = me.user;
     $("signInBtn").hidden = !!u;
@@ -553,6 +620,8 @@
     $("accountEmail").textContent = me.user.email;
     $("editDefaultBtn").hidden = !me.user.admin;
     $("peopleBtn").hidden = !me.user.admin;
+    renderIconSwatches();
+    showIconColor(iconColor, true);
     accountDialog.showModal();
   };
   // Your name shows in the account menu and as "<name> via Frunk" on invite emails.
@@ -569,6 +638,7 @@
   };
   $("signOutBtn").onclick = async () => {
     await api("/api/logout", { method: "POST" }).catch(() => {});
+    store.del("frunk-icon-color");
     location.replace("/");
   };
   $("editDefaultBtn").onclick = async () => {
@@ -1259,6 +1329,13 @@
   (async () => {
     me = await api("/api/me").catch(() => me);
     renderAccount();
+    const saved = (me.user && me.user.iconColor) || ICON_RED;
+    if (saved !== iconColor) {
+      iconColor = saved;
+      showIconColor(saved);
+    }
+    if (saved === ICON_RED) store.del("frunk-icon-color");
+    else store.set("frunk-icon-color", saved);
     try {
       sites = await api("/api/sites");
       render();

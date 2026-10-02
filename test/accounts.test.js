@@ -55,3 +55,13 @@ test("odd email addresses are refused", () => {
     assert.equal(a.createInvite(bad), null, bad);
   }
 });
+
+test("icon color: hex only, null resets to default", async () => {
+  const a = fresh();
+  const { user } = await a.acceptInvite(a.createInvite("c@example.com").token, { password: "colorful1" }, []);
+  assert.ok(a.setIconColor(user, "#3E6AE1"));
+  assert.equal(user.iconColor, "#3e6ae1");
+  for (const bad of ["red", "#fff", "#12345g", "url(x)", 7]) assert.equal(a.setIconColor(user, bad), false, String(bad));
+  assert.ok(a.setIconColor(user, null));
+  assert.equal(user.iconColor, undefined);
+});

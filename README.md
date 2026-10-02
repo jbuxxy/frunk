@@ -23,6 +23,8 @@ the browser into fullscreen with one tap.
   [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons) and
   [Simple Icons](https://simpleicons.org). You can also pick another logo or color.
   Hold a tile for its menu; in edit mode, hold and drag to reorder.
+- **Your own icon color.** Each person can recolor the highlighted tile in the
+  Frunk logo from their account menu.
 - **Accounts.** Invite-only. People sign in with Google or a password, and each
   person has their own page. Signed-out visitors see a default page that the admin
   edits.

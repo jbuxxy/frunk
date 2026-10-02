@@ -721,7 +721,7 @@ const server = http.createServer(async (req, res) => {
     // ---------- Sign-in ----------
     if (route("GET", "/api/me")) {
       return json(res, 200, {
-        user: user && { name: user.name, email: user.email, admin: !!user.admin },
+        user: user && { name: user.name, email: user.email, admin: !!user.admin, iconColor: user.iconColor || null },
         google: !!(GOOGLE_ID && GOOGLE_SECRET),
         googleClientId: GOOGLE_ID || undefined,
       });
@@ -876,9 +876,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith("/api/") && !user) return json(res, 401, { error: "Sign in first." });
 
     if (route("PUT", "/api/me")) {
-      const { name } = (await readBody(req)) || {};
-      if (!accounts.setName(user, name)) return json(res, 400, { error: "Enter a name." });
-      return json(res, 200, { name: user.name, email: user.email, admin: !!user.admin });
+      const body = (await readBody(req)) || {};
+      if ("name" in body && !accounts.setName(user, body.name)) return json(res, 400, { error: "Enter a name." });
+      if ("iconColor" in body && !accounts.setIconColor(user, body.iconColor)) return json(res, 400, { error: "Pick a color like #3e6ae1." });
+      return json(res, 200, { name: user.name, email: user.email, admin: !!user.admin, iconColor: user.iconColor || null });
     }
     if (route("PUT", "/api/sites") || route("PUT", "/api/default")) {
       const isDefault = pathname === "/api/default";
