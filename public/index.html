@@ -200,12 +200,14 @@
     <form method="dialog">
       <div class="account-head">
         <button type="button" class="avatar-circle" id="accountAvatar" aria-label="Change your color"></button>
-        <h2 id="accountName"></h2>
-        <button type="button" class="pill small" id="renameBtn">Edit name</button>
+        <div class="account-who" tabindex="-1" autofocus>
+          <h2 id="accountName"></h2>
+          <p class="hint" id="accountEmail"></p>
+        </div>
       </div>
-      <p class="hint" id="accountEmail"></p>
       <div class="menu">
-        <button type="button" class="pill" id="editDefaultBtn" hidden>Edit the public default page</button>
+        <button type="button" class="pill" id="renameBtn">Edit name</button>
+        <button type="button" class="pill" id="editDefaultBtn" hidden>Edit public page</button>
         <button type="button" class="pill" id="peopleBtn" hidden>People &amp; invites</button>
         <button type="button" class="pill danger" id="signOutBtn">Sign out</button>
       </div>
@@ -219,14 +221,14 @@
   <!-- Color of your profile circle -->
   <dialog class="sheet narrow" id="avatarDialog">
     <form method="dialog">
-      <div class="avatar-circle big" id="avatarPreview" aria-hidden="true"></div>
+      <div class="avatar-circle big" id="avatarPreview" aria-hidden="true" tabindex="-1" autofocus></div>
       <h2 id="avatarTitle">Your color</h2>
       <p class="hint" id="avatarIntro" hidden>Pick a color for your profile circle. You can change it any time from your account menu.</p>
       <div class="swatches" id="avatarSwatches"></div>
       <div class="sheet-actions">
         <span class="spacer"></span>
         <button type="button" class="pill" id="avatarCancel">Cancel</button>
-        <button type="button" class="pill accent" id="avatarSave" autofocus>Save</button>
+        <button type="button" class="pill accent" id="avatarSave">Save</button>
       </div>
     </form>
   </dialog>

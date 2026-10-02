@@ -362,9 +362,13 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 .person.expired { box-shadow: inset 4px 0 0 #e82127; }
 .person.expired .person-name { color: var(--muted); }
 
-.account-head { display: flex; align-items: center; gap: 16px; }
-.account-head h2 { margin-bottom: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
-#accountEmail { margin-top: 6px; }
+.account-head { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; }
+.account-who { flex: 1; min-width: 0; }
+.account-who h2, .account-who .hint { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.account-who .hint { margin-top: 4px; }
+.avatar-circle:focus:not(:focus-visible) { outline: none; }
+/* Dialogs open with focus on a non-button element, so no button shows a focus ring. */
+.account-who:focus, #avatarPreview:focus { outline: none; }
 .avatar-circle {
   flex: none; width: 56px; height: 56px; border-radius: 50%; border: 0; padding: 0;
   display: grid; place-items: center; cursor: pointer;
