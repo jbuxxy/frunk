@@ -1,3 +1,14 @@
+/* Self-hosted (Latin subset; SIL OFL, licenses in /fonts). Other scripts fall
+   back to the system font. Inter is one variable file for all weights. */
+@font-face {
+  font-family: Inter; font-style: normal; font-weight: 400 700; font-display: swap;
+  src: url(/fonts/inter-latin.woff2) format("woff2");
+}
+@font-face {
+  font-family: Rajdhani; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(/fonts/rajdhani-700-latin.woff2) format("woff2");
+}
+
 :root {
   --bg: #0f1114;
   --tile: #1c1f24;
@@ -286,6 +297,9 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 }
 .person-actions:empty { display: none; }
 .pill.small { min-height: 44px; padding: 0 16px; font-size: 16px; }
+@media (max-width: 600px) {
+  .pill.small { min-height: 40px; padding: 0 14px; font-size: 15px; }
+}
 .pill.small.danger { background: transparent; }
 
 .invite-row { display: flex; gap: 12px; align-items: center; }

@@ -8,9 +8,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon-512.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css?v=__V__">
 </head>
 <body>
@@ -67,7 +65,7 @@
       <div class="sheet-actions">
         <button type="button" class="pill danger" id="deleteBtn">Delete</button>
         <span class="spacer"></span>
-        <button type="button" class="pill" id="cancelBtn">Cancel</button>
+        <button type="button" class="pill" id="cancelBtn" data-close>Cancel</button>
         <button type="submit" class="pill accent">Save</button>
       </div>
     </form>
@@ -76,7 +74,7 @@
   <!-- First tile tap in the car without fullscreen -->
   <dialog class="sheet narrow" id="fsPrompt">
     <form method="dialog">
-      <button type="button" class="sheet-x" id="fsPromptClose" aria-label="Close">&times;</button>
+      <button type="button" class="sheet-x" id="fsPromptClose" data-close aria-label="Close">&times;</button>
       <div class="fs-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></div>
       <h2>Go fullscreen?</h2>
       <p class="hint">For the best experience while parked, use Frunk in fullscreen. You'll see a YouTube page &mdash; tap <b>Go to site</b> once and you're back.</p>
@@ -96,7 +94,7 @@
         <button type="button" class="pill" id="tileMenuEdit">Edit</button>
         <button type="button" class="pill" id="tileMenuArrange">Rearrange tiles</button>
         <button type="button" class="pill danger" id="tileMenuRemove">Remove</button>
-        <button type="button" class="pill" id="tileMenuCancel">Cancel</button>
+        <button type="button" class="pill" id="tileMenuCancel" data-close>Cancel</button>
       </div>
     </form>
   </dialog>
@@ -121,7 +119,7 @@
       <div class="hint error" id="signInError"></div>
       <div class="sheet-actions">
         <span class="spacer"></span>
-        <button type="button" class="pill" id="signInCancel">Cancel</button>
+        <button type="button" class="pill" id="signInCancel" data-close>Cancel</button>
         <button type="submit" class="pill accent">Sign in</button>
       </div>
     </form>
@@ -138,7 +136,7 @@
       <div class="sheet-actions">
         <button type="button" class="pill text-btn" id="pairOnScreen">Sign in on this screen instead</button>
         <span class="spacer"></span>
-        <button type="button" class="pill" id="pairCancel">Cancel</button>
+        <button type="button" class="pill" id="pairCancel" data-close>Cancel</button>
       </div>
     </form>
   </dialog>
@@ -165,7 +163,7 @@
       <input name="code" class="code-input" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
       <div class="sheet-actions">
         <span class="spacer"></span>
-        <button type="button" class="pill" id="enterCodeCancel">Cancel</button>
+        <button type="button" class="pill" id="enterCodeCancel" data-close>Cancel</button>
         <button type="submit" class="pill accent">Next</button>
       </div>
     </form>
@@ -189,7 +187,7 @@
       <div class="hint error" id="signupError"></div>
       <div class="sheet-actions">
         <span class="spacer"></span>
-        <button type="button" class="pill" id="signupCancel">Cancel</button>
+        <button type="button" class="pill" id="signupCancel" data-close>Cancel</button>
         <button type="submit" class="pill accent" id="signupSubmit">Create account</button>
       </div>
     </form>
@@ -248,14 +246,13 @@
       <p class="hint" id="inviteHint">They can sign in with Google using that email, or open the invite link to set a password.</p>
       <div class="sheet-actions">
         <span class="spacer"></span>
-        <button type="button" class="pill" id="peopleClose">Close</button>
+        <button type="button" class="pill" id="peopleClose" data-close>Close</button>
       </div>
     </form>
   </dialog>
 
   <div class="toast" id="toast" popover="manual" role="status"></div>
 
-  <script src="/vendor/qrcode.min.js?v=__V__"></script>
   <script src="/app.js?v=__V__"></script>
 </body>
 </html>

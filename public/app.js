@@ -4,6 +4,8 @@
   const grid = $("grid");
   const siteDialog = $("siteDialog");
   const siteForm = $("siteForm");
+  // This deploy's asset version, from our own script URL (app.js?v=...).
+  const ASSET_V = new URL(document.currentScript.src).searchParams.get("v") || "";
 
   const PALETTE = ["#3e6ae1", "#e82127", "#1db954", "#e5a00d", "#9146ff", "#00a3a3", "#ff6b35", "#d63384"];
   // The Tesla browser doesn't name itself: it reports plain Linux Chrome
@@ -56,6 +58,12 @@
   setInterval(tick, 10_000);
 
   // ---------- Helpers ----------
+  // Buttons marked data-close (Cancel, Close, ×) just close their dialog.
+  document.addEventListener("click", (e) => e.target.closest("[data-close]")?.closest("dialog")?.close());
+
+  // Pair codes: 6 letters/digits, shown as "ABC DEF".
+  const cleanCode = (code) => code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const fmtCode = (code) => `${code.slice(0, 3)} ${code.slice(3)}`;
   function toast(msg, ms = 2600) {
     const t = $("toast");
     t.textContent = msg;
@@ -250,10 +258,12 @@
       logo.src = art.src;
       return logo;
     }
-    // Site's own small icon as an app-style badge, letter until it loads.
+    // Site's own small icon as an app-style badge, letter until it loads. An
+    // unsaved tile has no id yet, so the server has no icon for it: letter only.
     const badge = document.createElement("div");
     badge.className = "app-icon";
     badge.textContent = (site.name || "?").trim().charAt(0).toUpperCase();
+    if (!site.id) return badge;
     const img = new Image();
     img.alt = "";
     img.src = iconSrc(site);
@@ -301,17 +311,18 @@
   }
 
   const fsPrompt = $("fsPrompt");
+  let fsSite = null;
   function openFullscreenPrompt(site) {
+    fsSite = site;
     $("fsPromptJust").textContent = `Just open ${site.name}`;
-    $("fsPromptGo").onclick = () => location.assign(fullscreenUrl(site.id));
-    $("fsPromptJust").onclick = () => {
-      fsPromptShown = true; // only a choice counts; the X just closes it
-      fsPrompt.close();
-      location.assign(site.url);
-    };
     fsPrompt.showModal();
   }
-  $("fsPromptClose").onclick = () => fsPrompt.close();
+  $("fsPromptGo").onclick = () => location.assign(fullscreenUrl(fsSite.id));
+  $("fsPromptJust").onclick = () => {
+    fsPromptShown = true; // only a choice counts; the X just closes it
+    fsPrompt.close();
+    location.assign(fsSite.url);
+  };
 
   // ---------- Tile press handling ----------
   // Outside edit mode: tap opens the site; long-press (or right-click) opens the
@@ -530,20 +541,22 @@
     if (!site || !confirm(`Remove ${site.name} from your page?`)) return;
     await save(sites.filter((s) => s.id !== menuId));
   };
-  $("tileMenuCancel").onclick = () => tileMenu.close();
 
   // ---------- Edit mode ----------
   // editTarget: "mine" edits your own tiles; "default" (admin) edits the public page.
+  // Meanwhile your own list waits in mySites, so going back never depends on a
+  // reload (a failed one used to leave the public tiles to be saved as yours).
   let editTarget = "mine";
+  let mySites = null;
   $("editBtn").onclick = () => setEditing(!editing);
   $("doneBtn").onclick = () => setEditing(false);
 
-  async function setEditing(on, target = "mine") {
+  function setEditing(on) {
     if (!on && editTarget === "default") {
       editTarget = "mine";
-      sites = await api("/api/sites").catch(() => sites);
+      sites = mySites;
+      mySites = null;
     }
-    if (on) editTarget = target;
     editing = on;
     $("editBannerText").textContent = editTarget === "default"
       ? "Editing the public default page · tap a tile to edit · drag to reorder"
@@ -576,36 +589,45 @@
     el.textContent = String(name || "?").trim().charAt(0).toUpperCase() || "?";
   }
 
-  // Preset swatches plus a color wheel. onPick(color) fires live, wheel included.
-  function renderColorSwatches(box, selected, onPick) {
+  // Preset swatches plus a color wheel (the device's native picker), and with
+  // auto ({ bg, fg }) a leading "Auto" swatch that picks null.
+  // onPick(color, live) fires on every pick; live is true while dragging in the
+  // wheel, when the caller must not rebuild the swatches or the picker closes.
+  function renderColorSwatches(box, selected, onPick, auto = null) {
     box.replaceChildren();
-    for (const color of PALETTE) {
+    const isHex = (c) => /^#[0-9a-f]{6}$/i.test(c || "");
+    const clearOn = () => box.querySelectorAll(".swatch.on").forEach((x) => x.classList.remove("on"));
+    for (const color of auto ? [null, ...PALETTE] : PALETTE) {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "swatch" + (color === selected ? " on" : "");
-      b.style.background = color;
-      b.setAttribute("aria-label", `Color ${color}`);
+      b.style.background = color || auto.bg;
+      b.setAttribute("aria-label", color ? `Color ${color}` : "Automatic color");
+      if (!color) {
+        b.textContent = "Auto";
+        b.classList.add("auto");
+        b.style.color = auto.fg;
+      }
       b.onclick = () => {
-        box.querySelectorAll(".swatch.on").forEach((x) => x.classList.remove("on"));
+        clearOn();
         b.classList.add("on");
-        onPick(color);
+        onPick(color, false);
       };
       box.append(b);
     }
-    const custom = !PALETTE.includes(selected);
+    const custom = !!selected && !PALETTE.includes(selected);
     const wheel = document.createElement("label");
     wheel.className = "swatch wheel" + (custom ? " on" : "");
     wheel.setAttribute("aria-label", "Pick any color");
     if (custom) wheel.style.setProperty("--picked", selected);
     const input = document.createElement("input");
     input.type = "color";
-    input.value = selected;
-    // Live while dragging; nothing is rebuilt, so the native picker stays open.
+    input.value = isHex(selected) ? selected : isHex(auto?.bg) ? auto.bg : PALETTE[0];
     input.oninput = () => {
-      box.querySelectorAll(".swatch.on").forEach((x) => x.classList.remove("on"));
+      clearOn();
       wheel.classList.add("on");
       wheel.style.setProperty("--picked", input.value);
-      onPick(input.value);
+      onPick(input.value, true);
     };
     wheel.append(input);
     box.append(wheel);
@@ -735,7 +757,6 @@
     return isTesla || (coarse && big);
   }
   $("signInBtn").onclick = () => (signInByPhoneFirst() ? startPairing() : openSignIn());
-  $("signInCancel").onclick = () => signInDialog.close();
   $("signInForm").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -776,8 +797,11 @@
   $("editDefaultBtn").onclick = async () => {
     accountDialog.close();
     try {
-      sites = await api("/api/default");
-      setEditing(true, "default");
+      const list = await api("/api/default");
+      if (editTarget === "mine") mySites = sites;
+      editTarget = "default";
+      sites = list;
+      setEditing(true);
     } catch (err) {
       toast(err.message);
     }
@@ -785,6 +809,9 @@
 
   // Invite links: /?invite=<token> → create an account or set a password.
   const signupDialog = $("signupDialog");
+  const signupForm = $("signupForm");
+  const signup = { token: "", email: "", color: AVATAR_DEFAULT };
+  const paintSignup = () => paintAvatar($("signupAvatar"), signup.color, signupForm.name.value || signup.email);
   async function openInvite(token) {
     let info;
     try {
@@ -793,7 +820,7 @@
       toast(err.message, 5000);
       return;
     }
-    $("signupForm").reset();
+    signupForm.reset();
     $("signupError").textContent = "";
     $("signupTitle").textContent = info.existing ? "Set a new password" : "Join Frunk";
     $("signupIntro").textContent = info.existing
@@ -801,27 +828,24 @@
       : `You've been invited as ${info.email}. Pick a password, or sign in with Google using that address.`;
     $("signupNameRow").hidden = info.existing;
     $("signupColorRow").hidden = info.existing;
-    let signupColor = AVATAR_DEFAULT;
-    const nameField = $("signupForm").name;
-    const paintSignup = () => paintAvatar($("signupAvatar"), signupColor, nameField.value || info.email);
-    nameField.oninput = paintSignup;
-    renderColorSwatches($("signupSwatches"), signupColor, (c) => { signupColor = c; paintSignup(); });
+    Object.assign(signup, { token, email: info.email, color: AVATAR_DEFAULT });
+    renderColorSwatches($("signupSwatches"), signup.color, (c) => { signup.color = c; paintSignup(); });
     paintSignup();
     $("signupGoogle").hidden = !me.google || info.existing;
     $("signupSubmit").textContent = info.existing ? "Save password" : "Create account";
     signupDialog.showModal();
-    $("signupCancel").onclick = () => signupDialog.close();
-    $("signupForm").onsubmit = async (e) => {
-      e.preventDefault();
-      const f = e.target;
-      try {
-        await api("/api/signup", { method: "POST", body: JSON.stringify({ token, name: f.name.value, password: f.password.value, avatarColor: signupColor }) });
-        location.replace("/");
-      } catch (err) {
-        $("signupError").textContent = err.message;
-      }
-    };
   }
+  signupForm.name.oninput = paintSignup;
+  signupForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api("/api/signup", { method: "POST", body: JSON.stringify({ token: signup.token, name: f.name.value, password: f.password.value, avatarColor: signup.color }) });
+      location.replace("/");
+    } catch (err) {
+      $("signupError").textContent = err.message;
+    }
+  };
 
   // ---------- Sign in with your phone ----------
   // Car side: show a QR code + short code and poll until a phone approves it.
@@ -842,11 +866,27 @@
     await showPairCode();
   }
 
+  // Only the car's sign-in screen draws QR codes, so the library loads on first use.
+  let qrReady = null;
+  function loadQr() {
+    qrReady ||= new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `/vendor/qrcode.min.js?v=${ASSET_V}`;
+      script.onload = resolve;
+      script.onerror = () => {
+        qrReady = null;
+        reject(new Error("Couldn't load the QR code. Try again."));
+      };
+      document.head.append(script);
+    });
+    return qrReady;
+  }
+
   async function showPairCode() {
     stopPairing();
     let pair;
     try {
-      pair = await api("/api/pair/start", { method: "POST", body: "{}" });
+      [pair] = await Promise.all([api("/api/pair/start", { method: "POST", body: "{}" }), loadQr()]);
     } catch (err) {
       if (pairDialog.open) pairDialog.close();
       return toast(err.message);
@@ -855,7 +895,7 @@
     qr.addData(pair.link);
     qr.make();
     $("pairQr").innerHTML = qr.createSvgTag({ cellSize: 6, margin: 3, scalable: true });
-    $("pairCode").textContent = `${pair.code.slice(0, 3)} ${pair.code.slice(3)}`;
+    $("pairCode").textContent = fmtCode(pair.code);
     $("pairHost").textContent = `${location.host}/pair`;
     if (!pairDialog.open) pairDialog.showModal();
     const poll = async () => {
@@ -882,7 +922,6 @@
     pairTimer = setTimeout(poll, 2000);
   }
   $("phoneSignInBtn").onclick = startPairing;
-  $("pairCancel").onclick = () => pairDialog.close();
   $("pairOnScreen").onclick = () => {
     pairDialog.close();
     openSignIn();
@@ -891,31 +930,31 @@
 
   // Phone side: approve a code (from the QR link, or typed in).
   const approveDialog = $("approveDialog");
+  let approveCode = "";
   function openApprove(code) {
-    code = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    $("approveCode").textContent = `${code.slice(0, 3)} ${code.slice(3)}`;
+    approveCode = cleanCode(code);
+    $("approveCode").textContent = fmtCode(approveCode);
     $("approveWho").textContent = me.user.email;
     $("approveError").textContent = "";
     approveDialog.showModal();
-    const send = (b, action) => pressed(b, async () => {
-      try {
-        await api(`/api/pair/${action}`, { method: "POST", body: JSON.stringify({ code }) });
-        approveDialog.close();
-        toast(action === "approve" ? "Your car is signed in." : "Cancelled.", 4000);
-      } catch (err) {
-        $("approveError").textContent = err.message;
-      }
-    });
-    $("approveOk").onclick = (e) => send(e.currentTarget, "approve");
-    $("approveDeny").onclick = (e) => send(e.currentTarget, "deny");
   }
+  const sendApproval = (b, action) => pressed(b, async () => {
+    try {
+      await api(`/api/pair/${action}`, { method: "POST", body: JSON.stringify({ code: approveCode }) });
+      approveDialog.close();
+      toast(action === "approve" ? "Your car is signed in." : "Cancelled.", 4000);
+    } catch (err) {
+      $("approveError").textContent = err.message;
+    }
+  });
+  $("approveOk").onclick = (e) => sendApproval(e.currentTarget, "approve");
+  $("approveDeny").onclick = (e) => sendApproval(e.currentTarget, "deny");
 
   const enterCodeDialog = $("enterCodeDialog");
   function openEnterCode() {
     $("enterCodeForm").reset();
     enterCodeDialog.showModal();
   }
-  $("enterCodeCancel").onclick = () => enterCodeDialog.close();
   $("enterCodeForm").onsubmit = (e) => {
     e.preventDefault();
     const code = e.target.code.value;
@@ -926,7 +965,6 @@
   // ---------- Admin: people ----------
   const peopleDialog = $("peopleDialog");
   $("peopleBtn").onclick = () => { accountDialog.close(); pickedTiles.clear(); renderInviteTiles(); openPeople(); };
-  $("peopleClose").onclick = () => peopleDialog.close();
 
   // Send the link yourself (text, iMessage, your own email) via the phone's share
   // sheet: a message from someone they know never lands in spam.
@@ -1154,7 +1192,7 @@
 
   function draftSite() {
     return {
-      id: draftId || "preview",
+      id: draftId,
       name: nameInput.value.trim() || "New site",
       url: normalizeUrl(urlInput.value) || "https://example.com",
       color: chosenColor || undefined,
@@ -1268,39 +1306,11 @@
   nameInput.addEventListener("change", loadLogoOptions);
 
   function renderSwatches(draft) {
-    swatches.replaceChildren();
-    const autoColors = cardColors({ ...draft, color: undefined });
-    const auto = autoColors.bg;
-    for (const color of [null, ...PALETTE]) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "swatch" + (color === chosenColor ? " on" : "");
-      b.style.background = color || auto;
-      if (!color) { b.textContent = "Auto"; b.classList.add("auto"); b.style.color = autoColors.fg; }
-      b.setAttribute("aria-label", color ? `Color ${color}` : "Automatic color");
-      b.onclick = () => { chosenColor = color; refreshDraft(); };
-      swatches.append(b);
-    }
-    // Any color: a rainbow swatch wrapping the device's native color picker.
-    const custom = chosenColor && !PALETTE.includes(chosenColor);
-    const wheel = document.createElement("label");
-    wheel.className = "swatch wheel" + (custom ? " on" : "");
-    wheel.setAttribute("aria-label", "Pick any color");
-    if (custom) wheel.style.setProperty("--picked", chosenColor);
-    const input = document.createElement("input");
-    input.type = "color";
-    input.value = custom ? chosenColor : (/^#[0-9a-f]{6}$/i.test(auto) ? auto : "#3e6ae1");
-    // Live while dragging in the picker; the wheel itself isn't rebuilt so the
-    // native picker stays open.
-    input.oninput = () => {
-      chosenColor = input.value;
-      wheel.classList.add("on");
-      wheel.style.setProperty("--picked", input.value);
-      swatches.querySelectorAll(".swatch.on:not(.wheel)").forEach((x) => x.classList.remove("on"));
-      paintCard($("tilePreview"), draftSite());
-    };
-    wheel.append(input);
-    swatches.append(wheel);
+    renderColorSwatches(swatches, chosenColor, (color, live) => {
+      chosenColor = color;
+      if (live) paintCard($("tilePreview"), draftSite());
+      else refreshDraft();
+    }, cardColors({ ...draft, color: undefined }));
   }
 
   // ---------- Quick picks for Add site ----------
@@ -1427,7 +1437,6 @@
     loadLogoOptions();
   });
 
-  $("cancelBtn").onclick = () => siteDialog.close();
 
   $("deleteBtn").onclick = async () => {
     siteDialog.close();

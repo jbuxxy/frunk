@@ -48,6 +48,7 @@ const MIME = {
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".woff2": "font/woff2",
   ".webmanifest": "application/manifest+json",
 };
 
@@ -103,7 +104,39 @@ function validSites(body) {
 // Fetched by the server (on the LAN, so it can see private services that
 // Google's favicon service can't), then cached in memory + on disk.
 const ICON_DIR = path.join(DATA_DIR, "icons");
-const iconCache = new Map(); // key -> { type, buf } | null (known miss)
+// Found icons live only on disk; memory holds just recent misses and lookups
+// in progress, so it stays small however many tiles there are.
+const iconMisses = new Map(); // key -> when the lookup found nothing (retried after 10 min)
+const iconLookups = new Map(); // key -> in-flight lookup, shared by concurrent requests
+
+// Recently fetched preview images, capped by total bytes (oldest dropped first).
+// A miss is kept as null so a bad address isn't refetched on every redraw.
+class ImageCache {
+  constructor(maxBytes) {
+    this.maxBytes = maxBytes;
+    this.bytes = 0;
+    this.map = new Map();
+  }
+  get(key) {
+    return this.map.get(key);
+  }
+  set(key, img) {
+    const size = img ? img.buf.length : 0;
+    if (size > this.maxBytes / 4) return; // one huge image shouldn't flush the rest
+    this.delete(key);
+    this.map.set(key, img);
+    this.bytes += size;
+    for (const oldest of this.map.keys()) {
+      if (this.bytes <= this.maxBytes && this.map.size <= 500) break;
+      this.delete(oldest);
+    }
+  }
+  delete(key) {
+    const old = this.map.get(key);
+    if (old) this.bytes -= old.buf.length;
+    this.map.delete(key);
+  }
+}
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36";
 
 // allowPrivate: may reach addresses on the server's own network (admins only).
@@ -158,7 +191,7 @@ async function iconCandidates(siteUrl, allowPrivate) {
 // plex, plex-alt, plex-light...), Simple Icons marks (youtubemusic -> youtube,
 // youtubetv...), then images from the site itself.
 const previewable = new Map(); // remote image URL the preview proxy may fetch -> allowPrivate
-const previewCache = new Map(); // typed Icon URL -> image | null
+const previewCache = new ImageCache(8 * 1024 * 1024); // "<who> <image URL>" -> image | null
 async function logoOptions(name, url, allowPrivate) {
   await Promise.all([loadBrands(), loadDashIcons()]);
   const options = [];
@@ -207,26 +240,32 @@ async function logoOptions(name, url, allowPrivate) {
 async function getIcon(site, allowPrivate) {
   // Separate cache entries, so a private-network icon never reaches an untrusted tile.
   const key = crypto.createHash("sha1").update(`${allowPrivate ? "" : "public:"}${site.icon || site.url}`).digest("hex");
-  if (iconCache.has(key)) return iconCache.get(key);
   const file = path.join(ICON_DIR, key);
   try {
     const meta = JSON.parse(fs.readFileSync(`${file}.json`, "utf8"));
-    const hit = { type: meta.type, buf: fs.readFileSync(file) };
-    iconCache.set(key, hit);
-    return hit;
+    return { type: meta.type, buf: fs.readFileSync(file) };
   } catch {}
+  if (Date.now() - (iconMisses.get(key) || 0) < 10 * 60_000) return null;
+  if (!iconLookups.has(key)) {
+    iconLookups.set(key, findIcon(site, allowPrivate, key, file).finally(() => iconLookups.delete(key)));
+  }
+  return iconLookups.get(key);
+}
+
+async function findIcon(site, allowPrivate, key, file) {
   let hit = null;
   for (const url of site.icon ? [site.icon] : await iconCandidates(site.url, allowPrivate)) {
     hit = await fetchImage(url, allowPrivate).catch(() => null);
     if (hit) break;
   }
-  iconCache.set(key, hit);
   if (hit) {
     fs.mkdirSync(ICON_DIR, { recursive: true });
     fs.writeFileSync(file, hit.buf);
     fs.writeFileSync(`${file}.json`, JSON.stringify({ type: hit.type }));
+    iconMisses.delete(key);
   } else {
-    setTimeout(() => iconCache.delete(key), 10 * 60_000); // retry misses later
+    if (iconMisses.size > 1000) iconMisses.clear();
+    iconMisses.set(key, Date.now());
   }
   return hit;
 }
@@ -245,11 +284,15 @@ function slugify(s) {
 
 // A remote JSON index kept on disk under /data and refreshed after 30 days.
 // The returned loader resolves at once when loaded() is already true, and
-// otherwise returns the in-flight download so callers can await it.
+// otherwise returns the in-flight download so callers can await it. After a
+// failed download it waits 10 minutes before trying again, so requests don't
+// each stall on the timeout while the CDN is unreachable.
 function cachedIndex({ file, url, what, loaded, index }) {
   let loading = null;
+  let failedAt = 0;
   return () => {
     if (loaded() || loading) return loading;
+    if (Date.now() - failedAt < 10 * 60_000) return null;
     try {
       const stat = fs.statSync(file);
       index(JSON.parse(fs.readFileSync(file, "utf8")));
@@ -262,7 +305,10 @@ function cachedIndex({ file, url, what, loaded, index }) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
         fs.writeFileSync(file, text);
       })
-      .catch((err) => console.warn(`Couldn't load ${what}: ${err.message}`))
+      .catch((err) => {
+        failedAt = Date.now();
+        console.warn(`Couldn't load ${what}: ${err.message}`);
+      })
       .finally(() => (loading = null));
     return loading;
   };
@@ -372,10 +418,11 @@ async function withBrands(sites) {
   return sites.map((s) => ({ ...s, art: artFor(s) || undefined }));
 }
 
-function fromTrustedProxy(req) {
-  const ip = String(req.socket.remoteAddress || "").replace(/^::ffff:/, "");
-  return net.isIP(ip) && TRUSTED_PROXIES.check(ip, net.isIP(ip) === 6 ? "ipv6" : "ipv4");
+function isTrustedProxy(addr) {
+  const ip = String(addr || "").trim().replace(/^::ffff:/, "");
+  return !!net.isIP(ip) && TRUSTED_PROXIES.check(ip, net.isIP(ip) === 6 ? "ipv6" : "ipv4");
 }
+const fromTrustedProxy = (req) => isTrustedProxy(req.socket.remoteAddress);
 
 // Only a fallback: set FRUNK_PUBLIC_URL so links never depend on request headers.
 function requestOrigin(req) {
@@ -389,8 +436,8 @@ const SECURITY_HEADERS = {
   "content-security-policy": [
     "default-src 'self'",
     "script-src 'self' https://accounts.google.com/gsi/client",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style", // Google's button injects inline styles
-    "font-src https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style", // Google's button injects inline styles
+    "font-src 'self'",
     "img-src 'self' data:",
     "connect-src 'self' https://accounts.google.com/gsi/",
     "frame-src https://accounts.google.com/gsi/",
@@ -420,12 +467,17 @@ function json(res, status, body) {
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let data = "";
+    // Bytes are joined before decoding: a character split across two chunks
+    // would otherwise turn into "\uFFFD".
+    const chunks = [];
+    let size = 0;
     req.on("data", (chunk) => {
-      data += chunk;
-      if (data.length > 256 * 1024) req.destroy(new Error("body too large"));
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > 256 * 1024) req.destroy(new Error("body too large"));
     });
     req.on("end", () => {
+      const data = Buffer.concat(chunks).toString("utf8");
       try {
         resolve(data ? JSON.parse(data) : null);
       } catch (err) {
@@ -537,9 +589,16 @@ function currentUser(req) {
 // and pairing starts (max 20).
 const RATE_WINDOW = 15 * 60_000;
 const failures = new Map(); // ip -> { count, since }
+// The visitor's address. A trusted proxy's X-Real-IP is set, not appended, so
+// it's used as is. X-Forwarded-For is appended to by each hop and its left end
+// is whatever the client sent, so it's read from the right, skipping our own
+// proxies, and the first address they didn't vouch for is the client.
 function clientIp(req) {
-  const forwarded = fromTrustedProxy(req) && (req.headers["x-real-ip"] || req.headers["x-forwarded-for"]);
-  return String(forwarded || req.socket.remoteAddress).split(",")[0].trim();
+  if (!fromTrustedProxy(req)) return req.socket.remoteAddress;
+  if (req.headers["x-real-ip"]) return String(req.headers["x-real-ip"]).trim();
+  const hops = String(req.headers["x-forwarded-for"] || "").split(",").map((h) => h.trim()).filter(Boolean);
+  while (hops.length > 1 && isTrustedProxy(hops.at(-1))) hops.pop();
+  return hops.at(-1) || req.socket.remoteAddress;
 }
 setInterval(() => {
   for (const map of [failures, pairStarts]) {
@@ -711,37 +770,254 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  let url, pathname, user;
-  const route = (method, p) => req.method === method && pathname === p;
+// ---------- Routes ----------
+// Each route names who may call it ("anyone", "user" or "admin"), checked in one
+// place below, so where a route sits in the list never decides who can reach it.
+// ":name" path segments arrive in params; handlers get { req, res, url, params, user }.
+const routes = [];
+function on(method, pattern, access, handler) {
+  const keys = [];
+  const re = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, key) => (keys.push(key), "([^/]+)"))}$`);
+  routes.push({ method, re, keys, access, handler });
+}
+
+const publicUser = (user) => ({ name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null });
+
+// ---------- Sign-in ----------
+on("GET", "/api/me", "anyone", ({ res, user }) => json(res, 200, {
+  user: user && { ...publicUser(user), pickColor: !!user.pickColor },
+  google: !!(GOOGLE_ID && GOOGLE_SECRET),
+  googleClientId: GOOGLE_ID || undefined,
+}));
+on("GET", "/auth/google", "anyone", ({ req, res }) => {
+  if (!GOOGLE_ID) return redirect(res, "/?signin_error=not_setup");
+  const state = crypto.randomBytes(16).toString("base64url");
+  // 30 min: phone 2-step prompts can take a while (resend, unlock, app opens first).
+  const recent = String(cookies(req).frunk_oauth || "").split(".").filter(Boolean).slice(-4);
+  setCookie(res, req, "frunk_oauth", [...recent, state].join("."), 30 * 60);
+  return redirect(res, "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
+    client_id: GOOGLE_ID,
+    redirect_uri: googleRedirectUri(req),
+    response_type: "code",
+    scope: "openid email profile",
+    state,
+    prompt: "select_account",
+  }));
+});
+on("GET", "/auth/google/callback", "anyone", ({ req, res, url }) => googleCallback(req, res, url.searchParams));
+on("POST", "/api/google/nonce", "anyone", ({ req, res }) => {
+  // One Tap: a fresh nonce, also kept in a cookie, so a captured token can't be replayed.
+  if (!GOOGLE_ID) return json(res, 404, { error: "Google sign-in isn't set up." });
+  const nonce = crypto.randomBytes(16).toString("base64url");
+  setCookie(res, req, "frunk_gnonce", nonce, 10 * 60);
+  return json(res, 200, { nonce });
+});
+on("POST", "/api/google/onetap", "anyone", async ({ req, res }) => {
+  const { credential } = (await readBody(req)) || {};
+  const nonce = cookies(req).frunk_gnonce;
+  setCookie(res, req, "frunk_gnonce", "", 0);
+  let claims;
   try {
-    url = new URL(req.url, "http://x");
-    ({ pathname } = url);
-    user = currentUser(req);
-    // ---------- Sign-in ----------
-    if (route("GET", "/api/me")) {
-      return json(res, 200, {
-        user: user && { name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null, pickColor: !!user.pickColor },
-        google: !!(GOOGLE_ID && GOOGLE_SECRET),
-        googleClientId: GOOGLE_ID || undefined,
-      });
-    }
-    if (route("GET", "/auth/google")) {
-      if (!GOOGLE_ID) return redirect(res, "/?signin_error=not_setup");
-      const state = crypto.randomBytes(16).toString("base64url");
-      // 30 min: phone 2-step prompts can take a while (resend, unlock, app opens first).
-      const recent = String(cookies(req).frunk_oauth || "").split(".").filter(Boolean).slice(-4);
-      setCookie(res, req, "frunk_oauth", [...recent, state].join("."), 30 * 60);
-      return redirect(res, "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
-        client_id: GOOGLE_ID,
-        redirect_uri: googleRedirectUri(req),
-        response_type: "code",
-        scope: "openid email profile",
-        state,
-        prompt: "select_account",
-      }));
-    }
-    if (route("GET", "/auth/google/callback")) return await googleCallback(req, res, url.searchParams);
+    claims = await verifyGoogleIdToken(credential, nonce);
+  } catch (err) {
+    console.warn(`Google One Tap failed (${clientIp(req)}): ${err.message}`);
+    return json(res, 401, { error: "Google sign-in failed, try again." });
+  }
+  const result = accounts.signInWithGoogle(googleUser(claims), readSites());
+  if (result.error) return json(res, 403, { error: result.error });
+  console.log(`Google One Tap sign-in: ${result.user.email}`);
+  startSession(res, req, result.user);
+  return json(res, 200, { ok: true });
+});
+on("POST", "/api/login", "anyone", async ({ req, res }) => {
+  const ip = clientIp(req);
+  if (overLimit(failures, ip, 10)) return json(res, 429, { error: "Too many attempts. Try again in 15 minutes." });
+  const { email, password } = (await readBody(req)) || {};
+  const found = await accounts.signInWithPassword(email, password);
+  if (!found) {
+    noteAttempt(failures, ip);
+    return json(res, 401, { error: "Wrong email or password." });
+  }
+  startSession(res, req, found);
+  return json(res, 200, { ok: true });
+});
+on("POST", "/api/logout", "anyone", ({ req, res }) => {
+  accounts.endSession(cookies(req)[COOKIE]);
+  setCookie(res, req, COOKIE, "", 0);
+  return json(res, 200, { ok: true });
+});
+on("GET", "/api/invite/:token", "anyone", ({ res, params }) => {
+  const invite = accounts.findInvite(params.token);
+  if (!invite) return json(res, 404, { error: "This invite link has expired or was already used." });
+  return json(res, 200, { email: invite.email, existing: !!accounts.byEmail(invite.email) });
+});
+on("POST", "/api/signup", "anyone", async ({ req, res }) => {
+  const { token, name, password, avatarColor } = (await readBody(req)) || {};
+  const result = await accounts.acceptInvite(String(token || ""), { name, password: String(password || ""), avatarColor }, readSites());
+  if (result.error) return json(res, 400, { error: result.error });
+  startSession(res, req, result.user);
+  return json(res, 200, { ok: true });
+});
+on("PUT", "/api/me", "user", async ({ req, res, user }) => {
+  const body = (await readBody(req)) || {};
+  if ("name" in body && !accounts.setName(user, body.name)) return json(res, 400, { error: "Enter a name." });
+  if ("avatarColor" in body && !accounts.setAvatarColor(user, body.avatarColor)) return json(res, 400, { error: "Pick a color like #3e6ae1." });
+  return json(res, 200, publicUser(user));
+});
+
+// ---------- Tiles ----------
+on("GET", "/api/sites", "anyone", async ({ res, user }) => json(res, 200, await withBrands(user ? user.sites : readSites())));
+on("GET", "/api/default", "anyone", async ({ res }) => json(res, 200, await withBrands(readSites())));
+on("PUT", "/api/sites", "user", async ({ req, res, user }) => {
+  const sites = validSites(await readBody(req));
+  if (!sites) return json(res, 400, { error: "invalid site list" });
+  accounts.setSites(user, sites);
+  return json(res, 200, await withBrands(sites));
+});
+on("PUT", "/api/default", "admin", async ({ req, res }) => {
+  const sites = validSites(await readBody(req));
+  if (!sites) return json(res, 400, { error: "invalid site list" });
+  writeSites(sites);
+  return json(res, 200, await withBrands(sites));
+});
+on("GET", "/api/preview", "anyone", async ({ res, url }) => {
+  // Thumbnails for the Logo picker; only URLs logoOptions just offered.
+  const u = url.searchParams.get("u");
+  if (!previewable.has(u)) return json(res, 404, { error: "no image" });
+  const key = `offered ${previewable.get(u) ? "private" : "public"} ${u}`;
+  let img = previewCache.get(key);
+  if (img === undefined) {
+    img = await fetchImage(u, previewable.get(u)).catch(() => null);
+    previewCache.set(key, img);
+  }
+  if (!img) return json(res, 404, { error: "no image" });
+  return sendImage(res, img.type, img.buf, "private, max-age=3600");
+});
+on("GET", "/api/preview-url", "user", async ({ res, url, user }) => {
+  // Live preview of an Icon URL typed in the edit box (signed-in users only):
+  // proxied so the page can sample its colors for the Auto card color.
+  const u = url.searchParams.get("u") || "";
+  if (!/^https?:\/\//i.test(u)) return json(res, 400, { error: "invalid url" });
+  const key = `${user.admin ? "admin" : "user"} ${u}`; // admins may see private addresses
+  let img = previewCache.get(key);
+  if (img === undefined) {
+    img = await fetchImage(u, !!user.admin).catch(() => null);
+    previewCache.set(key, img);
+  }
+  if (!img) return json(res, 404, { error: "no image" });
+  return sendImage(res, img.type, img.buf, "private, max-age=3600");
+});
+on("GET", "/api/dash/:name", "anyone", async ({ res, params: { name } }) => {
+  const svg = dashNames?.has(name) && (await cachedSvg(DI_DIR, name, `${DI_BASE}/svg/${name}.svg`).catch(() => null));
+  if (!svg) return json(res, 404, { error: "no logo" });
+  return sendImage(res, "image/svg+xml", svg, "public, max-age=604800");
+});
+on("GET", "/api/logo/:slug", "anyone", async ({ res, params: { slug } }) => {
+  const svg = brands && brands.has(slug) && (await cachedSvg(LOGO_DIR, slug, `${SI_BASE}/icons/${slug}.svg`).catch(() => null));
+  if (!svg) return json(res, 404, { error: "no logo" });
+  return sendImage(res, "image/svg+xml", svg, "public, max-age=604800");
+});
+on("GET", "/api/icon/:id", "anyone", async ({ res, params, user }) => {
+  // Only icons for saved tiles, so this can't be used to fetch arbitrary URLs.
+  const found = findSite(params.id, user);
+  const icon = found && (await getIcon(found.site, found.trusted));
+  if (!icon) return json(res, 404, { error: "no icon" });
+  return sendImage(res, icon.type, icon.buf, "public, max-age=86400");
+});
+on("POST", "/api/logo-options", "user", async ({ req, res, user }) => {
+  const body = (await readBody(req)) || {};
+  try {
+    return json(res, 200, await logoOptions(String(body.name || ""), new URL(body.url).href, !!user.admin));
+  } catch {
+    return json(res, 400, { error: "invalid url" });
+  }
+});
+
+// ---------- Sign in with your phone ----------
+// Car side (signed out): get a code, then poll until a phone answers.
+on("POST", "/api/pair/start", "anyone", ({ req, res }) => {
+  const ip = clientIp(req);
+  if (overLimit(pairStarts, ip, 20)) return json(res, 429, { error: "Too many attempts. Try again later." });
+  noteAttempt(pairStarts, ip);
+  const id = crypto.randomBytes(24).toString("base64url");
+  const code = newPairCode();
+  pairs.set(id, { code, created: Date.now(), status: "pending", userId: null });
+  return json(res, 200, { id, code, link: `${publicOrigin(req)}/?pair=${code}`, expiresIn: PAIR_MS / 1000 });
+});
+on("GET", "/api/pair/poll/:id", "anyone", ({ req, res, params: { id } }) => {
+  const p = pairs.get(id);
+  if (!p || Date.now() - p.created > PAIR_MS) {
+    pairs.delete(id);
+    return json(res, 200, { status: "expired" });
+  }
+  if (p.status === "approved") {
+    pairs.delete(id);
+    const approver = accounts.allUsers().find((u) => u.id === p.userId);
+    if (!approver) return json(res, 200, { status: "expired" });
+    startSession(res, req, approver);
+    console.log(`Phone sign-in: ${approver.email}`);
+    return json(res, 200, { status: "approved" });
+  }
+  if (p.status === "denied") pairs.delete(id);
+  return json(res, 200, { status: p.status });
+});
+// Phone side (signed in): approve or turn down the code shown on the car.
+for (const [action, status] of [["approve", "approved"], ["deny", "denied"]]) {
+  on("POST", `/api/pair/${action}`, "user", async ({ req, res, user }) => {
+    const p = findPair(((await readBody(req)) || {}).code);
+    if (!p || p.status !== "pending") return json(res, 404, { error: "That code has expired. Start again on the car." });
+    p.status = status;
+    p.userId = user.id;
+    return json(res, 200, { ok: true });
+  });
+}
+
+// ---------- Admin: people + invites ----------
+const inviteLink = (req, invite) => ({ ...invite, link: `${publicOrigin(req)}/?invite=${invite.token}` });
+// Email a new or renewed invite; the reply says whether that worked.
+async function sendInvite(req, res, user, invite) {
+  const withLink = inviteLink(req, invite);
+  const emailError = await emailInvite(invite, withLink.link, user);
+  return json(res, 200, { ...withLink, emailed: !emailError, emailError: emailError || undefined });
+}
+on("GET", "/api/admin/people", "admin", ({ req, res }) => {
+  const p = accounts.people();
+  return json(res, 200, { ...p, invites: p.invites.map((i) => inviteLink(req, i)), email: !!mailer });
+});
+on("POST", "/api/admin/invites", "admin", async ({ req, res, user }) => {
+  const { email, tiles } = (await readBody(req)) || {};
+  // Tile ids from the admin's own page; copies go into the invite.
+  const picked = Array.isArray(tiles) ? user.sites.filter((t) => tiles.includes(t.id)) : [];
+  const invite = accounts.createInvite(email, picked);
+  if (!invite) return json(res, 400, { error: "That doesn't look like an email address." });
+  return sendInvite(req, res, user, invite);
+});
+on("POST", "/api/admin/invites/:token/renew", "admin", ({ req, res, params, user }) => {
+  // Expired invite -> fresh 14-day link (same email + tiles), emailed again.
+  const invite = accounts.renewInvite(params.token);
+  if (!invite) return json(res, 404, { error: "That invite no longer exists." });
+  return sendInvite(req, res, user, invite);
+});
+on("POST", "/api/admin/invites/:token/resend", "admin", async ({ req, res, params, user }) => {
+  const invite = accounts.findInvite(params.token);
+  if (!invite) return json(res, 404, { error: "That invite has expired." });
+  const emailError = await emailInvite(invite, inviteLink(req, invite).link, user);
+  return emailError ? json(res, 502, { error: `Couldn't send: ${emailError}` }) : json(res, 200, { ok: true });
+});
+on("DELETE", "/api/admin/invites/:token", "admin", ({ res, params }) => {
+  accounts.deleteInvite(params.token);
+  return json(res, 200, { ok: true });
+});
+on("DELETE", "/api/admin/users/:id", "admin", ({ res, params }) => {
+  if (!accounts.deleteUser(params.id)) return json(res, 400, { error: "Can't remove that account." });
+  return json(res, 200, { ok: true });
+});
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, "http://x");
+    const { pathname } = url;
+    const user = currentUser(req);
 
     // Mutating API calls must be JSON: blocks cross-site form posts (CSRF).
     if (pathname.startsWith("/api/") && req.method !== "GET" &&
@@ -749,217 +1025,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 415, { error: "expected JSON" });
     }
 
-    if (route("POST", "/api/google/nonce")) {
-      // One Tap: a fresh nonce, also kept in a cookie, so a captured token can't be replayed.
-      if (!GOOGLE_ID) return json(res, 404, { error: "Google sign-in isn't set up." });
-      const nonce = crypto.randomBytes(16).toString("base64url");
-      setCookie(res, req, "frunk_gnonce", nonce, 10 * 60);
-      return json(res, 200, { nonce });
-    }
-    if (route("POST", "/api/google/onetap")) {
-      const { credential } = (await readBody(req)) || {};
-      const nonce = cookies(req).frunk_gnonce;
-      setCookie(res, req, "frunk_gnonce", "", 0);
-      let claims;
-      try {
-        claims = await verifyGoogleIdToken(credential, nonce);
-      } catch (err) {
-        console.warn(`Google One Tap failed (${clientIp(req)}): ${err.message}`);
-        return json(res, 401, { error: "Google sign-in failed, try again." });
-      }
-      const result = accounts.signInWithGoogle(googleUser(claims), readSites());
-      if (result.error) return json(res, 403, { error: result.error });
-      console.log(`Google One Tap sign-in: ${result.user.email}`);
-      startSession(res, req, result.user);
-      return json(res, 200, { ok: true });
-    }
-    if (route("POST", "/api/login")) {
-      const ip = clientIp(req);
-      if (overLimit(failures, ip, 10)) return json(res, 429, { error: "Too many attempts. Try again in 15 minutes." });
-      const { email, password } = (await readBody(req)) || {};
-      const found = await accounts.signInWithPassword(email, password);
-      if (!found) {
-        noteAttempt(failures, ip);
-        return json(res, 401, { error: "Wrong email or password." });
-      }
-      startSession(res, req, found);
-      return json(res, 200, { ok: true });
-    }
-    if (route("POST", "/api/logout")) {
-      accounts.endSession(cookies(req)[COOKIE]);
-      setCookie(res, req, COOKIE, "", 0);
-      return json(res, 200, { ok: true });
-    }
-    if (req.method === "GET" && pathname.startsWith("/api/invite/")) {
-      const invite = accounts.findInvite(pathname.slice("/api/invite/".length));
-      if (!invite) return json(res, 404, { error: "This invite link has expired or was already used." });
-      return json(res, 200, { email: invite.email, existing: !!accounts.byEmail(invite.email) });
-    }
-    if (route("POST", "/api/signup")) {
-      const { token, name, password, avatarColor } = (await readBody(req)) || {};
-      const result = await accounts.acceptInvite(String(token || ""), { name, password: String(password || ""), avatarColor }, readSites());
-      if (result.error) return json(res, 400, { error: result.error });
-      startSession(res, req, result.user);
-      return json(res, 200, { ok: true });
-    }
-
-    // ---------- Tiles ----------
-    if (route("GET", "/api/sites")) {
-      return json(res, 200, await withBrands(user ? user.sites : readSites()));
-    }
-    if (route("GET", "/api/default")) {
-      return json(res, 200, await withBrands(readSites()));
-    }
-    if (route("GET", "/api/preview")) {
-      // Thumbnails for the Logo picker; only URLs logoOptions just offered.
-      const u = url.searchParams.get("u");
-      const img = previewable.has(u) && (await fetchImage(u, previewable.get(u)).catch(() => null));
-      if (!img) return json(res, 404, { error: "no image" });
-      return sendImage(res, img.type, img.buf, "private, max-age=3600");
-    }
-    if (req.method === "GET" && pathname.startsWith("/api/dash/")) {
-      const name = pathname.slice("/api/dash/".length);
-      const svg = dashNames?.has(name) && (await cachedSvg(DI_DIR, name, `${DI_BASE}/svg/${name}.svg`).catch(() => null));
-      if (!svg) return json(res, 404, { error: "no logo" });
-      return sendImage(res, "image/svg+xml", svg, "public, max-age=604800");
-    }
-    if (req.method === "GET" && pathname.startsWith("/api/logo/")) {
-      const slug = pathname.slice("/api/logo/".length);
-      const svg = brands && brands.has(slug) && (await cachedSvg(LOGO_DIR, slug, `${SI_BASE}/icons/${slug}.svg`).catch(() => null));
-      if (!svg) return json(res, 404, { error: "no logo" });
-      return sendImage(res, "image/svg+xml", svg, "public, max-age=604800");
-    }
-    if (req.method === "GET" && pathname.startsWith("/api/icon/")) {
-      // Only icons for saved tiles, so this can't be used to fetch arbitrary URLs.
-      const found = findSite(pathname.slice("/api/icon/".length), user);
-      const icon = found && (await getIcon(found.site, found.trusted));
-      if (!icon) return json(res, 404, { error: "no icon" });
-      return sendImage(res, icon.type, icon.buf, "public, max-age=86400");
-    }
-    // ---------- Sign in with your phone: car side (signed out) ----------
-    if (route("POST", "/api/pair/start")) {
-      const ip = clientIp(req);
-      if (overLimit(pairStarts, ip, 20)) return json(res, 429, { error: "Too many attempts. Try again later." });
-      noteAttempt(pairStarts, ip);
-      const id = crypto.randomBytes(24).toString("base64url");
-      const code = newPairCode();
-      pairs.set(id, { code, created: Date.now(), status: "pending", userId: null });
-      return json(res, 200, { id, code, link: `${publicOrigin(req)}/?pair=${code}`, expiresIn: PAIR_MS / 1000 });
-    }
-    if (req.method === "GET" && pathname.startsWith("/api/pair/poll/")) {
-      const id = pathname.slice("/api/pair/poll/".length);
-      const p = pairs.get(id);
-      if (!p || Date.now() - p.created > PAIR_MS) {
-        pairs.delete(id);
-        return json(res, 200, { status: "expired" });
-      }
-      if (p.status === "approved") {
-        pairs.delete(id);
-        const approver = accounts.allUsers().find((u) => u.id === p.userId);
-        if (!approver) return json(res, 200, { status: "expired" });
-        startSession(res, req, approver);
-        console.log(`Phone sign-in: ${approver.email}`);
-        return json(res, 200, { status: "approved" });
-      }
-      if (p.status === "denied") pairs.delete(id);
-      return json(res, 200, { status: p.status });
-    }
-
-    // Everything below needs a signed-in user.
-    if (pathname.startsWith("/api/") && !user) return json(res, 401, { error: "Sign in first." });
-
-    if (route("PUT", "/api/me")) {
-      const body = (await readBody(req)) || {};
-      if ("name" in body && !accounts.setName(user, body.name)) return json(res, 400, { error: "Enter a name." });
-      if ("avatarColor" in body && !accounts.setAvatarColor(user, body.avatarColor)) return json(res, 400, { error: "Pick a color like #3e6ae1." });
-      return json(res, 200, { name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null });
-    }
-    if (route("PUT", "/api/sites") || route("PUT", "/api/default")) {
-      const isDefault = pathname === "/api/default";
-      if (isDefault && !user.admin) return json(res, 403, { error: "Only the admin can edit the default page." });
-      const sites = validSites(await readBody(req));
-      if (!sites) return json(res, 400, { error: "invalid site list" });
-      if (isDefault) writeSites(sites);
-      else accounts.setSites(user, sites);
-      return json(res, 200, await withBrands(sites));
-    }
-    if (route("GET", "/api/preview-url")) {
-      // Live preview of an Icon URL typed in the edit box (signed-in users only):
-      // proxied so the page can sample its colors for the Auto card color.
-      const u = url.searchParams.get("u") || "";
-      if (!/^https?:\/\//i.test(u)) return json(res, 400, { error: "invalid url" });
-      const key = `${user.admin ? "admin" : "user"} ${u}`; // admins may see private addresses
-      let img = previewCache.get(key);
-      if (img === undefined) {
-        img = await fetchImage(u, !!user.admin).catch(() => null);
-        if (previewCache.size > 100) previewCache.clear();
-        previewCache.set(key, img);
-      }
-      if (!img) return json(res, 404, { error: "no image" });
-      return sendImage(res, img.type, img.buf, "private, max-age=3600");
-    }
-    if (route("POST", "/api/logo-options")) {
-      const body = (await readBody(req)) || {};
-      try {
-        return json(res, 200, await logoOptions(String(body.name || ""), new URL(body.url).href, !!user.admin));
-      } catch {
-        return json(res, 400, { error: "invalid url" });
-      }
-    }
-    // ---------- Sign in with your phone: phone side (signed in) ----------
-    if (route("POST", "/api/pair/approve") || route("POST", "/api/pair/deny")) {
-      const p = findPair(((await readBody(req)) || {}).code);
-      if (!p || p.status !== "pending") return json(res, 404, { error: "That code has expired. Start again on the car." });
-      p.status = pathname.endsWith("approve") ? "approved" : "denied";
-      p.userId = user.id;
-      return json(res, 200, { ok: true });
-    }
-
-    // ---------- Admin: people + invites ----------
-    if (pathname.startsWith("/api/admin/")) {
-      if (!user.admin) return json(res, 403, { error: "Admins only." });
-      const inviteLink = (i) => ({ ...i, link: `${publicOrigin(req)}/?invite=${i.token}` });
-      // Email a new or renewed invite; the reply says whether that worked.
-      const sendInvite = async (invite) => {
-        const withLink = inviteLink(invite);
-        const emailError = await emailInvite(invite, withLink.link, user);
-        return json(res, 200, { ...withLink, emailed: !emailError, emailError: emailError || undefined });
-      };
-      if (route("GET", "/api/admin/people")) {
-        const p = accounts.people();
-        return json(res, 200, { ...p, invites: p.invites.map(inviteLink), email: !!mailer });
-      }
-      if (route("POST", "/api/admin/invites")) {
-        const { email, tiles } = (await readBody(req)) || {};
-        // Tile ids from the admin's own page; copies go into the invite.
-        const picked = Array.isArray(tiles) ? user.sites.filter((t) => tiles.includes(t.id)) : [];
-        const invite = accounts.createInvite(email, picked);
-        if (!invite) return json(res, 400, { error: "That doesn't look like an email address." });
-        return sendInvite(invite);
-      }
-      if (req.method === "POST" && pathname.startsWith("/api/admin/invites/") && pathname.endsWith("/renew")) {
-        // Expired invite -> fresh 14-day link (same email + tiles), emailed again.
-        const invite = accounts.renewInvite(pathname.slice("/api/admin/invites/".length, -"/renew".length));
-        if (!invite) return json(res, 404, { error: "That invite no longer exists." });
-        return sendInvite(invite);
-      }
-      if (req.method === "POST" && pathname.startsWith("/api/admin/invites/") && pathname.endsWith("/resend")) {
-        const token = pathname.slice("/api/admin/invites/".length, -"/resend".length);
-        const invite = accounts.findInvite(token);
-        if (!invite) return json(res, 404, { error: "That invite has expired." });
-        const emailError = await emailInvite(invite, inviteLink(invite).link, user);
-        return emailError ? json(res, 502, { error: `Couldn't send: ${emailError}` }) : json(res, 200, { ok: true });
-      }
-      if (req.method === "DELETE" && pathname.startsWith("/api/admin/invites/")) {
-        accounts.deleteInvite(pathname.slice("/api/admin/invites/".length));
-        return json(res, 200, { ok: true });
-      }
-      if (req.method === "DELETE" && pathname.startsWith("/api/admin/users/")) {
-        if (!accounts.deleteUser(pathname.slice("/api/admin/users/".length))) {
-          return json(res, 400, { error: "Can't remove that account." });
-        }
-        return json(res, 200, { ok: true });
-      }
+    for (const r of routes) {
+      if (r.method !== req.method) continue;
+      const m = r.re.exec(pathname);
+      if (!m) continue;
+      if (r.access !== "anyone" && !user) return json(res, 401, { error: "Sign in first." });
+      if (r.access === "admin" && !user.admin) return json(res, 403, { error: "Admins only." });
+      const params = Object.fromEntries(r.keys.map((key, i) => [key, m[i + 1]]));
+      return await r.handler({ req, res, url, params, user });
     }
 
     if (pathname.startsWith("/api/")) return json(res, 404, { error: "not found" });
@@ -985,6 +1058,7 @@ server.listen(PORT, () => {
   const owner = process.env.FRUNK_OWNER_EMAIL && accounts.byEmail(process.env.FRUNK_OWNER_EMAIL);
   if (owner && !owner.password && !(owner.google && GOOGLE_ID)) {
     const invite = accounts.pendingInvite(owner.email) || accounts.createInvite(owner.email);
-    console.log(`Set the admin password here: ${PUBLIC_URL || `http://localhost:${PORT}`}/?invite=${invite.token}`);
+    if (invite) console.log(`Set the admin password here: ${PUBLIC_URL || `http://localhost:${PORT}`}/?invite=${invite.token}`);
+    else console.warn(`FRUNK_OWNER_EMAIL (${owner.email}) isn't a full email address, so no sign-up link could be made. Use one like you@example.com.`);
   }
 });
