@@ -273,7 +273,8 @@ async function findIcon(site, allowPrivate, key, file) {
 // ---------- Brand logos (Simple Icons) ----------
 // Official single-color logos + brand colors for well-known services, used for
 // the big Theater-style cards. Data is fetched once and cached under /data.
-const SI_BASE = "https://cdn.jsdelivr.net/npm/simple-icons@latest";
+// Both logo sources can be pointed elsewhere (a mirror, or a local fake in tests).
+const SI_BASE = process.env.SIMPLE_ICONS_URL || "https://cdn.jsdelivr.net/npm/simple-icons@latest";
 const LOGO_DIR = path.join(DATA_DIR, "logos");
 const BRANDS_FILE = path.join(DATA_DIR, "simple-icons.json");
 let brands = null; // slug -> hex
@@ -351,7 +352,7 @@ function brandFor(site) {
 // homarr-labs/dashboard-icons: full-color SVG logos for self-hosted + streaming
 // apps (the orange Plex chevron, Immich's pinwheel, Disney+, Hulu...). Primary
 // logo source; Simple Icons is the fallback.
-const DI_BASE = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons";
+const DI_BASE = process.env.DASHBOARD_ICONS_URL || "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons";
 const DI_FILE = path.join(DATA_DIR, "dashboard-icons.json");
 const DI_DIR = path.join(DATA_DIR, "dashboard-icons");
 let dashIcons = null; // dashless key -> first name, e.g. "plex" -> "plex"
@@ -1050,7 +1051,8 @@ const server = http.createServer(async (req, res) => {
 loadBrands();
 loadDashIcons();
 server.listen(PORT, () => {
-  console.log(`Frunk listening on :${PORT}`);
+  const port = server.address().port; // PORT=0 picks a free one
+  console.log(`Frunk listening on :${port}`);
   if (!process.env.FRUNK_OWNER_EMAIL) console.warn("FRUNK_OWNER_EMAIL isn't set — nobody is admin and nobody can be invited.");
   if (!GOOGLE_ID || !GOOGLE_SECRET) console.warn("GOOGLE_CLIENT_ID/SECRET aren't set — Google sign-in is off.");
   if (!mailer) console.warn("SMTP_* isn't set — invites won't be emailed (links are copied instead).");
@@ -1058,7 +1060,7 @@ server.listen(PORT, () => {
   const owner = process.env.FRUNK_OWNER_EMAIL && accounts.byEmail(process.env.FRUNK_OWNER_EMAIL);
   if (owner && !owner.password && !(owner.google && GOOGLE_ID)) {
     const invite = accounts.pendingInvite(owner.email) || accounts.createInvite(owner.email);
-    if (invite) console.log(`Set the admin password here: ${PUBLIC_URL || `http://localhost:${PORT}`}/?invite=${invite.token}`);
+    if (invite) console.log(`Set the admin password here: ${PUBLIC_URL || `http://localhost:${port}`}/?invite=${invite.token}`);
     else console.warn(`FRUNK_OWNER_EMAIL (${owner.email}) isn't a full email address, so no sign-up link could be made. Use one like you@example.com.`);
   }
 });

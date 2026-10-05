@@ -67,17 +67,27 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `TRUSTED_PROXIES` | Reverse-proxy IPs or CIDRs (comma-separated) whose `X-Real-IP` / `X-Forwarded-*` headers are trusted. Default `127.0.0.1,::1`. Without it, the login lockout sees only your proxy's address. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional Google sign-in. See [Google sign-in](docs/google-sign-in.md). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
-| `PORT`, `DATA_DIR` | Listen port (default `3000`) and data folder (default `./data`, `/data` in Docker). |
+| `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
+| `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
 
 ## Development
 
-Frunk needs Node.js 22 or later and has no `npm install` step.
+Frunk needs Node.js 22 or later. Running it needs no `npm install`; only the
+browser test has a dependency.
 
 ```sh
-npm run dev     # node --watch server.js, on http://localhost:3000
-npm test        # unit tests (node:test)
-npm run check   # syntax check of every source file
+npm run dev           # node --watch server.js, on http://localhost:3000
+npm test              # unit + API tests (node:test), no network needed
+npm run check         # syntax check of every source file
+npm install && npm run test:browser   # the real page in headless Chrome
 ```
+
+The API tests in `test/server.test.js` start the real server on a free port with
+a throwaway data folder, and a fake logo CDN and website on localhost
+(`test/helpers.js`). The browser test walks the main screens and fails on any
+script error or broken dialog; it looks for Chrome at `CHROME_PATH` and skips
+itself without it. GitHub Actions runs all of it, plus a Docker build, on every
+push and pull request.
 
 To preview the car-only UI on a desktop, override the browser's user agent with
 one containing `Tesla` (Chrome DevTools → Network conditions).
@@ -92,6 +102,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `mailer.js` | Minimal SMTP client for invite emails |
 | `public/` | The launcher page (`index.html`, `app.js`, `style.css`) |
 | `public/vendor/qrcode.min.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT |
+| `public/fonts/` | Inter and Rajdhani (Latin subset), SIL Open Font License |
+| `test/` | Unit, API and browser tests |
 
 ## Security notes
 

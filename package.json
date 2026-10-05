@@ -12,6 +12,10 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "check": "node --check server.js && node --check accounts.js && node --check mailer.js && node --check fetcher.js && node --check public/app.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:browser": "node --test test/browser.smoke.js"
+  },
+  "devDependencies": {
+    "puppeteer-core": "25.12.0"
   }
 }
