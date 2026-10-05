@@ -22,11 +22,9 @@
   let editingId = null;
 
   const store = {
-    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
-    del(k) { try { localStorage.removeItem(k); } catch {} },
     sget(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
     sset(k, v) { try { sessionStorage.setItem(k, v); } catch {} },
+    sdel(k) { try { sessionStorage.removeItem(k); } catch {} },
   };
 
   // ---------- Fullscreen via the YouTube redirect ----------
@@ -68,27 +66,26 @@
     toast.timer = setTimeout(() => t.hidePopover(), ms);
   }
 
-  // Disable a button while its action runs, so a tap visibly registers.
-  async function pressed(b, fn) {
-    if (b.disabled) return;
+  // Runs a button's action with the button disabled, so a tap visibly registers
+  // and can't fire twice. A failure toasts; if fn resolves truthy and there's a
+  // done label, the button shows it briefly ("Copied ✓").
+  async function pressed(b, fn, done) {
+    const label = b.textContent;
     b.disabled = true;
     try {
-      await fn(b);
+      if ((await fn()) && done) {
+        b.textContent = done;
+        b.classList.add("done");
+        setTimeout(() => {
+          b.textContent = label;
+          b.classList.remove("done");
+        }, 1800);
+      }
+    } catch (err) {
+      toast(err.message, 5000);
     } finally {
       b.disabled = false;
     }
-  }
-
-  // Briefly swap a button's label to confirm it worked.
-  function flashDone(b, label) {
-    const orig = b.dataset.label ??= b.textContent;
-    b.textContent = label;
-    b.classList.add("done");
-    clearTimeout(b.doneTimer);
-    b.doneTimer = setTimeout(() => {
-      b.textContent = orig;
-      b.classList.remove("done");
-    }, 1800);
   }
 
   function normalizeUrl(raw) {
@@ -98,11 +95,15 @@
     try { return new URL(s).href; } catch { return null; }
   }
 
-  function colorFor(site) {
-    if (site.color) return site.color;
+  // Small stable string hash, for default colors and cache-busting versions.
+  function hash(str) {
     let h = 0;
-    for (const c of site.url) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-    return PALETTE[h % PALETTE.length];
+    for (const c of str) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return h;
+  }
+
+  function colorFor(site) {
+    return site.color || PALETTE[hash(site.url) % PALETTE.length];
   }
 
   async function api(path, opts = {}) {
@@ -203,33 +204,45 @@
 
   function iconSrc(site) {
     // Version the URL so a changed address or icon fetches a fresh image.
-    let v = 0;
-    for (const c of site.icon || site.url) v = (v * 31 + c.charCodeAt(0)) >>> 0;
-    return `/api/icon/${site.id}?v=${v.toString(36)}`;
+    return `/api/icon/${site.id}?v=${hash(site.icon || site.url).toString(36)}`;
+  }
+
+  // A single-color brand logo, tinted with color via a CSS mask.
+  function markEl(slug, color, className = "mini-mark") {
+    const mark = document.createElement("div");
+    mark.className = className;
+    mark.style.background = color;
+    mark.style.webkitMaskImage = mark.style.maskImage = `url(/api/logo/${slug})`;
+    return mark;
+  }
+
+  // The card tint sampled from a loaded logo, worked out once per image.
+  function tintOf(img, src) {
+    if (!tintCache.has(src)) tintCache.set(src, tintFromImage(img));
+    return tintCache.get(src);
+  }
+
+  // Card background + text color for a site; returns the logo color to use.
+  function paintCard(el, site) {
+    const { bg, fg } = cardColors(site);
+    el.style.setProperty("--card", bg);
+    el.style.color = fg === "#111" ? "#111" : "#fff";
+    return fg;
   }
 
   // tile: the card element to tint once a full-color logo loads (if no custom color).
   function tileArt(site, fg, tile) {
     const art = site.art;
     // Single-color brand mark, tinted via CSS mask.
-    if (art && art.type === "mark") {
-      const mark = document.createElement("div");
-      mark.className = "mark";
-      mark.style.background = fg;
-      const url = `url(/api/logo/${art.slug})`;
-      mark.style.webkitMaskImage = url;
-      mark.style.maskImage = url;
-      return mark;
-    }
+    if (art && art.type === "mark") return markEl(art.slug, fg, "mark");
     // Full-color logo or custom image, straight on the card.
     if (art && art.type === "image") {
       const logo = new Image();
       logo.alt = "";
       logo.className = "custom-logo";
       logo.onload = () => {
-        if (!tintCache.has(art.src)) tintCache.set(art.src, tintFromImage(logo));
+        const t = tintOf(logo, art.src);
         if (tile && !site.color) {
-          const t = tintCache.get(art.src);
           tile.style.setProperty("--card", t.bg);
           tile.style.color = t.fg;
         }
@@ -262,10 +275,7 @@
       const tile = document.createElement("button");
       tile.className = "tile";
       tile.dataset.id = site.id;
-      const { bg, fg } = cardColors(site);
-      tile.style.setProperty("--card", bg);
-      tile.style.color = fg === "#111" ? "#111" : "#fff";
-      tile.append(tileArt(site, fg, tile));
+      tile.append(tileArt(site, paintCard(tile, site), tile));
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = site.name;
@@ -525,7 +535,7 @@
   // ---------- Edit mode ----------
   // editTarget: "mine" edits your own tiles; "default" (admin) edits the public page.
   let editTarget = "mine";
-  $("editBtn").onclick = () => (editing ? setEditing(false) : setEditing(true));
+  $("editBtn").onclick = () => setEditing(!editing);
   $("doneBtn").onclick = () => setEditing(false);
 
   async function setEditing(on, target = "mine") {
@@ -887,7 +897,7 @@
     $("approveWho").textContent = me.user.email;
     $("approveError").textContent = "";
     approveDialog.showModal();
-    const send = async (action) => {
+    const send = (b, action) => pressed(b, async () => {
       try {
         await api(`/api/pair/${action}`, { method: "POST", body: JSON.stringify({ code }) });
         approveDialog.close();
@@ -895,9 +905,9 @@
       } catch (err) {
         $("approveError").textContent = err.message;
       }
-    };
-    $("approveOk").onclick = () => send("approve");
-    $("approveDeny").onclick = () => send("deny");
+    });
+    $("approveOk").onclick = (e) => send(e.currentTarget, "approve");
+    $("approveDeny").onclick = (e) => send(e.currentTarget, "deny");
   }
 
   const enterCodeDialog = $("enterCodeDialog");
@@ -930,13 +940,7 @@
         if (err.name === "AbortError") return;
       }
     }
-    try {
-      await navigator.clipboard.writeText(msg);
-      toast("Invite message copied: paste it into a text or email");
-      return true;
-    } catch {
-      prompt("Copy this and send it:", msg);
-    }
+    return copyText(msg, "Invite message copied: paste it into a text or email", "Copy this and send it:");
   }
 
   // Emailed if the server could send it; otherwise copy the link to share by hand.
@@ -948,13 +952,17 @@
     }
   }
 
-  async function copyLink(link) {
+  const copyLink = (link) => copyText(link, "Invite link copied", "Copy this invite link:");
+
+  // Copies text and toasts okMsg; true if it reached the clipboard. Without
+  // clipboard access, shows it in a prompt to copy by hand.
+  async function copyText(text, okMsg, promptMsg) {
     try {
-      await navigator.clipboard.writeText(link);
-      toast("Invite link copied");
+      await navigator.clipboard.writeText(text);
+      toast(okMsg);
       return true;
     } catch {
-      prompt("Copy this invite link:", link);
+      prompt(promptMsg, text);
       return false;
     }
   }
@@ -990,17 +998,20 @@
       text.append(t, st);
       const acts = document.createElement("div");
       acts.className = "person-actions";
-      for (const [label, cls, fn] of actions) {
+      for (const [label, cls, fn, done] of actions) {
         const b = document.createElement("button");
         b.type = "button";
         b.className = `pill small ${cls}`;
         b.textContent = label;
-        b.onclick = () => pressed(b, fn);
+        b.onclick = () => pressed(b, fn, done);
         acts.append(b);
       }
       r.append(text, acts);
       list.append(r);
     };
+    $("inviteHint").textContent = data.email
+      ? "We'll email them a link to join. They can also just sign in with Google using that email."
+      : "Email isn't set up, so the invite link is copied for you to send. They can also sign in with Google using that email.";
     for (const u of data.users) {
       const how = [u.google && "Google", u.password && "password"].filter(Boolean).join(" + ") || "not signed in yet";
       const actions = [];
@@ -1016,9 +1027,6 @@
           openPeople();
         }]);
       }
-      $("inviteHint").textContent = data.email
-        ? "We'll email them a link to join. They can also just sign in with Google using that email."
-        : "Email isn't set up, so the invite link is copied for you to send. They can also sign in with Google using that email.";
       row(`${u.name}${u.admin ? " · admin" : ""}`, `${u.email} · ${how} · ${u.tiles} tiles`, actions, ["✓ Joined", "joined"]);
     }
     for (const i of data.invites) {
@@ -1041,20 +1049,13 @@
         continue;
       }
       row(i.email, `${i.existing ? "Password reset link · " : ""}Expires ${fmtDate(i.expires)}${carries}`, [
-        ...(data.email ? [["Resend email", "", async (b) => {
-          b.textContent = "Sending…";
-          try {
-            await api(`/api/admin/invites/${i.token}/resend`, { method: "POST", body: "{}" });
-            b.textContent = "Resend email";
-            flashDone(b, "Sent ✓");
-            toast(`Emailed ${i.email} again`);
-          } catch (err) {
-            b.textContent = "Resend email";
-            toast(err.message, 5000);
-          }
-        }]] : []),
-        ["Share", "", async (b) => { if (await shareInvite(i)) flashDone(b, "Copied ✓"); }],
-        ["Copy link", "", async (b) => { if (await copyLink(i.link)) flashDone(b, "Copied ✓"); }],
+        ...(data.email ? [["Resend email", "", async () => {
+          await api(`/api/admin/invites/${i.token}/resend`, { method: "POST", body: "{}" });
+          toast(`Emailed ${i.email} again`);
+          return true;
+        }, "Sent ✓"]] : []),
+        ["Share", "", () => shareInvite(i), "Copied ✓"],
+        ["Copy link", "", () => copyLink(i.link), "Copied ✓"],
         ["Cancel", "danger", async () => {
           await api(`/api/admin/invites/${i.token}`, { method: "DELETE" });
           openPeople();
@@ -1085,11 +1086,7 @@
         img.src = t.art.src;
         b.append(img);
       } else if (t.art && t.art.type === "mark") {
-        const mark = document.createElement("div");
-        mark.className = "mini-mark";
-        mark.style.background = cardColors(t).fg;
-        mark.style.webkitMaskImage = mark.style.maskImage = `url(/api/logo/${t.art.slug})`;
-        b.append(mark);
+        b.append(markEl(t.art.slug, cardColors(t).fg));
       } else {
         b.append(tileArt(t, "#fff", null)); // the site's own icon, like on the main page
       }
@@ -1173,16 +1170,13 @@
     if (art && art.type === "image" && !tintCache.has(art.src)) {
       const probe = new Image();
       probe.onload = () => {
-        if (!tintCache.has(art.src)) tintCache.set(art.src, tintFromImage(probe));
+        tintOf(probe, art.src);
         if (draftArt()?.src === art.src) refreshDraft();
       };
       probe.src = art.src;
     }
     const card = $("tilePreview");
-    const { bg, fg } = cardColors(draft);
-    card.style.setProperty("--card", bg);
-    card.style.color = fg === "#111" ? "#111" : "#fff";
-    card.replaceChildren(tileArt(draft, fg, null));
+    card.replaceChildren(tileArt(draft, paintCard(card, draft), null));
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = draft.name;
@@ -1209,21 +1203,14 @@
         add(`${opt.slug} logo`, !icon && chosenLogo === opt.slug, () => { chosenLogo = opt.slug; iconInput.value = ""; }, (b) => {
           const { bg, fg } = cardColors({ url: urlInput.value || "x", art: { type: "mark", ...opt } });
           b.style.background = bg;
-          const mark = document.createElement("div");
-          mark.className = "mini-mark";
-          mark.style.background = fg;
-          mark.style.webkitMaskImage = mark.style.maskImage = `url(/api/logo/${opt.slug})`;
-          b.append(mark);
+          b.append(markEl(opt.slug, fg));
         });
       } else if (opt.kind === "dash") {
         const value = `di:${opt.name}`;
         add(`${opt.name} logo`, !icon && chosenLogo === value, () => { chosenLogo = value; iconInput.value = ""; }, (b) => {
           const img = new Image();
           img.alt = "";
-          img.onload = () => {
-            if (!tintCache.has(opt.preview)) tintCache.set(opt.preview, tintFromImage(img));
-            b.style.background = tintCache.get(opt.preview).bg;
-          };
+          img.onload = () => (b.style.background = tintOf(img, opt.preview).bg);
           img.src = opt.preview;
           b.append(img);
         });
@@ -1268,9 +1255,14 @@
     }
   }
 
+  // Waits for a pause in typing: each refresh with a new address fetches a preview.
+  let iconTimer;
   iconInput.addEventListener("input", () => {
-    renderLogoOptions();
-    refreshDraft();
+    clearTimeout(iconTimer);
+    iconTimer = setTimeout(() => {
+      renderLogoOptions();
+      refreshDraft();
+    }, 400);
   });
   nameInput.addEventListener("input", () => refreshDraft());
   nameInput.addEventListener("change", loadLogoOptions);
@@ -1279,8 +1271,7 @@
     swatches.replaceChildren();
     const autoColors = cardColors({ ...draft, color: undefined });
     const auto = autoColors.bg;
-    const presets = PALETTE;
-    for (const color of [null, ...presets]) {
+    for (const color of [null, ...PALETTE]) {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "swatch" + (color === chosenColor ? " on" : "");
@@ -1291,7 +1282,7 @@
       swatches.append(b);
     }
     // Any color: a rainbow swatch wrapping the device's native color picker.
-    const custom = chosenColor && !presets.includes(chosenColor);
+    const custom = chosenColor && !PALETTE.includes(chosenColor);
     const wheel = document.createElement("label");
     wheel.className = "swatch wheel" + (custom ? " on" : "");
     wheel.setAttribute("aria-label", "Pick any color");
@@ -1306,10 +1297,7 @@
       wheel.classList.add("on");
       wheel.style.setProperty("--picked", input.value);
       swatches.querySelectorAll(".swatch.on:not(.wheel)").forEach((x) => x.classList.remove("on"));
-      const card = $("tilePreview");
-      const { bg, fg } = cardColors(draftSite());
-      card.style.setProperty("--card", bg);
-      card.style.color = fg === "#111" ? "#111" : "#fff";
+      paintCard($("tilePreview"), draftSite());
     };
     wheel.append(input);
     swatches.append(wheel);
@@ -1363,11 +1351,7 @@
         img.src = `/api/dash/${p.dash}`;
         b.append(img);
       } else {
-        const mark = document.createElement("div");
-        mark.className = "mini-mark";
-        mark.style.background = "#111";
-        mark.style.webkitMaskImage = mark.style.maskImage = `url(/api/logo/${p.si})`;
-        b.append(mark);
+        b.append(markEl(p.si, "#111"));
       }
       const label = document.createElement("span");
       label.textContent = p.name;
@@ -1433,7 +1417,7 @@
     if (!nameInput.value.trim()) {
       const url = normalizeUrl(urlInput.value);
       if (url) {
-        const host = new URL(url).hostname.replace(/^www\./, "").split(".")[0];
+        const host = hostOf(url).split(".")[0];
         nameInput.value = host.charAt(0).toUpperCase() + host.slice(1);
       }
     }
@@ -1496,7 +1480,7 @@
       const code = q.get("pair") || store.sget("frunk-pair") || "?";
       history.replaceState(null, "", "/");
       if (me.user) {
-        try { sessionStorage.removeItem("frunk-pair"); } catch {}
+        store.sdel("frunk-pair");
         if (code === "?") openEnterCode();
         else openApprove(code);
       } else {

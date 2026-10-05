@@ -53,11 +53,9 @@ function createMailer({ host, port = 587, user, pass, from }) {
     return { cmd, detach };
   }
 
-  // fromName: display name override ("Alex via Frunk"); replyTo: where replies go.
-  async function send({ to, subject, text, html, fromName, replyTo }) {
-    for (const addr of [to, replyTo]) {
-      if (addr && /[\s<>]/.test(addr)) throw new Error("invalid email address");
-    }
+  // fromName: display name override ("Alex via Frunk").
+  async function send({ to, subject, text, html, fromName }) {
+    if (/[\s<>]/.test(to)) throw new Error("invalid email address");
     const helo = os.hostname() || "frunk";
     let socket = port === 465
       ? tls.connect({ host, port, servername: host })
@@ -94,7 +92,6 @@ function createMailer({ host, port = 587, user, pass, from }) {
       const msg = [
         `From: ${fromHeader}`,
         `To: <${to}>`,
-        ...(replyTo ? [`Reply-To: <${replyTo}>`] : []),
         `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
         `Date: ${new Date().toUTCString()}`,
         `Message-ID: <${crypto.randomUUID()}@${fromAddr.split("@")[1] || "frunk"}>`,

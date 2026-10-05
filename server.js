@@ -51,21 +51,28 @@ const MIME = {
   ".webmanifest": "application/manifest+json",
 };
 
+// Only this process writes the file, so its text is kept in memory. Parsed on
+// each read so callers always get their own copy.
+let sitesText = null;
 function readSites() {
-  try {
-    return JSON.parse(fs.readFileSync(SITES_FILE, "utf8"));
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-    writeSites(SEED);
-    return SEED;
+  if (sitesText === null) {
+    try {
+      sitesText = fs.readFileSync(SITES_FILE, "utf8");
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      writeSites(SEED);
+    }
   }
+  return JSON.parse(sitesText);
 }
 
 function writeSites(sites) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  const text = JSON.stringify(sites, null, 2);
   const tmp = `${SITES_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(sites, null, 2));
+  fs.writeFileSync(tmp, text);
   fs.renameSync(tmp, SITES_FILE);
+  sitesText = text;
 }
 
 function validSites(body) {
@@ -153,9 +160,8 @@ async function iconCandidates(siteUrl, allowPrivate) {
 const previewable = new Map(); // remote image URL the preview proxy may fetch -> allowPrivate
 const previewCache = new Map(); // typed Icon URL -> image | null
 async function logoOptions(name, url, allowPrivate) {
-  await loadBrands();
+  await Promise.all([loadBrands(), loadDashIcons()]);
   const options = [];
-  await loadDashIcons();
   const dash = dashFor({ name, url });
   if (dash) {
     // Family root: "youtube-music" -> also offer "youtube", "youtube-tv"...
@@ -232,42 +238,66 @@ const SI_BASE = "https://cdn.jsdelivr.net/npm/simple-icons@latest";
 const LOGO_DIR = path.join(DATA_DIR, "logos");
 const BRANDS_FILE = path.join(DATA_DIR, "simple-icons.json");
 let brands = null; // slug -> hex
-let brandsLoading = null;
 
 function slugify(s) {
   return s.toLowerCase().replace(/\+/g, "plus").replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
 }
 
-function loadBrands() {
-  if (brands || brandsLoading) return brandsLoading;
-  const index = (list) => {
+// A remote JSON index kept on disk under /data and refreshed after 30 days.
+// The returned loader resolves at once when loaded() is already true, and
+// otherwise returns the in-flight download so callers can await it.
+function cachedIndex({ file, url, what, loaded, index }) {
+  let loading = null;
+  return () => {
+    if (loaded() || loading) return loading;
+    try {
+      const stat = fs.statSync(file);
+      index(JSON.parse(fs.readFileSync(file, "utf8")));
+      if (Date.now() - stat.mtimeMs < 30 * 86_400_000) return null;
+    } catch {}
+    loading = fetch(url, { signal: AbortSignal.timeout(20_000) })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((text) => {
+        index(JSON.parse(text));
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(file, text);
+      })
+      .catch((err) => console.warn(`Couldn't load ${what}: ${err.message}`))
+      .finally(() => (loading = null));
+    return loading;
+  };
+}
+
+// An SVG kept on disk under dir, fetched from remoteUrl the first time.
+async function cachedSvg(dir, name, remoteUrl) {
+  const file = path.join(dir, `${name}.svg`);
+  try {
+    return fs.readFileSync(file);
+  } catch {}
+  const res = await fetch(remoteUrl, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) return null;
+  const buf = Buffer.from(await res.arrayBuffer());
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, buf);
+  return buf;
+}
+
+const loadBrands = cachedIndex({
+  file: BRANDS_FILE,
+  url: `${SI_BASE}/data/simple-icons.json`,
+  what: "brand list",
+  loaded: () => brands,
+  index: (list) => {
     brands = new Map();
     for (const i of Array.isArray(list) ? list : list.icons || []) brands.set(i.slug || slugify(i.title), i.hex);
-  };
-  try {
-    const stat = fs.statSync(BRANDS_FILE);
-    index(JSON.parse(fs.readFileSync(BRANDS_FILE, "utf8")));
-    if (Date.now() - stat.mtimeMs < 30 * 86_400_000) return null;
-  } catch {}
-  brandsLoading = fetch(`${SI_BASE}/data/simple-icons.json`, { signal: AbortSignal.timeout(20_000) })
-    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((text) => {
-      index(JSON.parse(text));
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(BRANDS_FILE, text);
-    })
-    .catch((err) => console.warn(`Couldn't load brand list: ${err.message}`))
-    .finally(() => (brandsLoading = null));
-  return brandsLoading;
-}
+  },
+});
 
 // Match by tile name first ("YouTube Music" -> youtubemusic), then hostname parts.
 function brandFor(site) {
   if (!brands || site.logo === "none" || site.logo?.startsWith("di:")) return null;
   if (site.logo && brands.has(site.logo)) return { slug: site.logo, hex: `#${brands.get(site.logo)}` };
-  const host = new URL(site.url).hostname.split(".").slice(0, -1).filter((p) => !["www", "app", "open", "web"].includes(p));
-  const candidates = [slugify(site.name), slugify([...host].reverse().join("")), ...host.map(slugify)];
-  for (const slug of candidates) if (slug && brands.has(slug)) return { slug, hex: `#${brands.get(slug)}` };
+  for (const slug of siteKeys(site)) if (brands.has(slug)) return { slug, hex: `#${brands.get(slug)}` };
   return null;
 }
 
@@ -278,36 +308,23 @@ function brandFor(site) {
 const DI_BASE = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons";
 const DI_FILE = path.join(DATA_DIR, "dashboard-icons.json");
 const DI_DIR = path.join(DATA_DIR, "dashboard-icons");
-let dashIcons = null; // dashless key -> [names], e.g. "plex" -> ["plex", "plex-alt", ...]
+let dashIcons = null; // dashless key -> first name, e.g. "plex" -> "plex"
 let dashNames = null; // Set of names
-let dashLoading = null;
 
-function loadDashIcons() {
-  if (dashIcons || dashLoading) return dashLoading;
-  const index = (tree) => {
+const loadDashIcons = cachedIndex({
+  file: DI_FILE,
+  url: `${DI_BASE}/tree.json`,
+  what: "dashboard icons",
+  loaded: () => dashIcons,
+  index: (tree) => {
     dashNames = new Set((tree.svg || []).map((f) => f.replace(/\.svg$/, "")));
     dashIcons = new Map();
     for (const n of dashNames) {
       const key = n.replace(/-/g, "");
       if (!dashIcons.has(key)) dashIcons.set(key, n);
     }
-  };
-  try {
-    const stat = fs.statSync(DI_FILE);
-    index(JSON.parse(fs.readFileSync(DI_FILE, "utf8")));
-    if (Date.now() - stat.mtimeMs < 30 * 86_400_000) return null;
-  } catch {}
-  dashLoading = fetch(`${DI_BASE}/tree.json`, { signal: AbortSignal.timeout(20_000) })
-    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((text) => {
-      index(JSON.parse(text));
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(DI_FILE, text);
-    })
-    .catch((err) => console.warn(`Couldn't load dashboard icons: ${err.message}`))
-    .finally(() => (dashLoading = null));
-  return dashLoading;
-}
+  },
+});
 
 function siteKeys(site) {
   const host = new URL(site.url).hostname.split(".").slice(0, -1).filter((p) => !["www", "app", "open", "web"].includes(p));
@@ -324,20 +341,6 @@ function dashFor(site) {
 function dashFamily(name) {
   return [...dashNames].filter((n) => n === name || n.startsWith(`${name}-`))
     .sort((a, b) => a.length - b.length || a.localeCompare(b));
-}
-
-async function getDashIcon(name) {
-  const file = path.join(DI_DIR, `${name}.svg`);
-  try {
-    return fs.readFileSync(file);
-  } catch {}
-  const res = await fetch(`${DI_BASE}/svg/${name}.svg`, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
-  const svg = await res.text();
-  const buf = Buffer.from(svg);
-  fs.mkdirSync(DI_DIR, { recursive: true });
-  fs.writeFileSync(file, buf);
-  return buf;
 }
 
 function iconVersion(str) {
@@ -364,21 +367,9 @@ function artFor(site) {
   return brand ? { type: "mark", ...brand } : null;
 }
 
-function withBrands(sites) {
+async function withBrands(sites) {
+  await Promise.all([loadBrands(), loadDashIcons()]);
   return sites.map((s) => ({ ...s, art: artFor(s) || undefined }));
-}
-
-async function getLogo(slug) {
-  const file = path.join(LOGO_DIR, `${slug}.svg`);
-  try {
-    return fs.readFileSync(file);
-  } catch {}
-  const res = await fetch(`${SI_BASE}/icons/${slug}.svg`, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.mkdirSync(LOGO_DIR, { recursive: true });
-  fs.writeFileSync(file, buf);
-  return buf;
 }
 
 function fromTrustedProxy(req) {
@@ -466,10 +457,12 @@ function mailLog(line) {
 const escapeHtml = (str) => String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 // Invite (or password reset) email. Returns null on success, or the error text.
-async function emailInvite(invite, link, inviter, isReset) {
+async function emailInvite(invite, link, inviter) {
   if (!mailer) return "Email isn't set up";
+  const isReset = !!accounts.byEmail(invite.email);
+  const kind = isReset ? "password reset" : "invite";
   const who = (inviter.name || inviter.email.split("@")[0]).trim();
-  const tiles = invite.tiles?.length ? invite.tiles.map((t) => t.name) : [];
+  const tiles = (invite.tiles || []).map((t) => t.name);
   const subject = isReset ? "Reset your Frunk password" : `${who} invited you to Frunk`;
   const lead = isReset
     ? "Use the button below to choose a new password for Frunk."
@@ -493,10 +486,10 @@ ${google ? `<tr><td style="font-size:14px;line-height:1.5;color:#8e939b">${escap
     // Sent as "<inviter> via Frunk". No Reply-To: a free-mail reply address on a
     // custom sending domain scores as forged with spam filters.
     await mailer.send({ to: invite.email, subject, text, html, fromName: `${who} via Frunk` });
-    mailLog(`sent ${isReset ? "password reset" : "invite"} to ${invite.email}`);
+    mailLog(`sent ${kind} to ${invite.email}`);
     return null;
   } catch (err) {
-    mailLog(`FAILED ${isReset ? "password reset" : "invite"} to ${invite.email}: ${err.message}`);
+    mailLog(`FAILED ${kind} to ${invite.email}: ${err.message}`);
     return err.message;
   }
 }
@@ -540,7 +533,9 @@ function currentUser(req) {
   return accounts.userForSession(cookies(req)[COOKIE]);
 }
 
-// Simple brute-force brake for password sign-in: 10 failures per IP per 15 min.
+// Per-IP attempt counts over a 15-minute window: password failures (max 10)
+// and pairing starts (max 20).
+const RATE_WINDOW = 15 * 60_000;
 const failures = new Map(); // ip -> { count, since }
 function clientIp(req) {
   const forwarded = fromTrustedProxy(req) && (req.headers["x-real-ip"] || req.headers["x-forwarded-for"]);
@@ -548,17 +543,16 @@ function clientIp(req) {
 }
 setInterval(() => {
   for (const map of [failures, pairStarts]) {
-    for (const [ip, f] of map) if (Date.now() - f.since > 15 * 60_000) map.delete(ip);
+    for (const [ip, f] of map) if (Date.now() - f.since >= RATE_WINDOW) map.delete(ip);
   }
-}, 15 * 60_000).unref();
-function tooManyFailures(ip) {
-  const f = failures.get(ip);
-  if (!f || Date.now() - f.since > 15 * 60_000) return false;
-  return f.count >= 10;
+}, RATE_WINDOW).unref();
+function overLimit(map, ip, max) {
+  const f = map.get(ip);
+  return !!f && Date.now() - f.since < RATE_WINDOW && f.count >= max;
 }
-function noteFailure(ip) {
-  const f = failures.get(ip);
-  if (!f || Date.now() - f.since > 15 * 60_000) failures.set(ip, { count: 1, since: Date.now() });
+function noteAttempt(map, ip) {
+  const f = map.get(ip);
+  if (!f || Date.now() - f.since >= RATE_WINDOW) map.set(ip, { count: 1, since: Date.now() });
   else f.count++;
 }
 
@@ -629,19 +623,25 @@ async function googleCallback(req, res, params) {
   if (!tokenRes.ok || !tokens.id_token) return fail("failed", `token exchange ${tokenRes.status} ${tokens.error || ""}`);
   // The ID token came straight from Google's token endpoint over TLS, so its
   // claims can be read directly; still check it was issued for this app.
-  const claims = JSON.parse(Buffer.from(tokens.id_token.split(".")[1], "base64url").toString());
-  if (claims.aud !== GOOGLE_ID || !["accounts.google.com", "https://accounts.google.com"].includes(claims.iss)) {
+  const claims = jwtPart(tokens.id_token.split(".")[1]);
+  if (claims.aud !== GOOGLE_ID || !GOOGLE_ISSUERS.includes(claims.iss)) {
     return fail("failed", `bad token aud/iss ${claims.aud} ${claims.iss}`);
   }
-  const result = accounts.signInWithGoogle(
-    { sub: claims.sub, email: claims.email, emailVerified: claims.email_verified === true || claims.email_verified === "true", name: claims.name },
-    readSites()
-  );
+  const result = accounts.signInWithGoogle(googleUser(claims), readSites());
   if (result.error) return fail(result.code, `${claims.email}: ${result.error}`);
   console.log(`Google sign-in: ${result.user.email}`);
   startSession(res, req, result.user);
   redirect(res, "/");
 }
+
+const GOOGLE_ISSUERS = ["accounts.google.com", "https://accounts.google.com"];
+const jwtPart = (part) => JSON.parse(Buffer.from(part, "base64url").toString());
+const googleUser = (claims) => ({
+  sub: claims.sub,
+  email: claims.email,
+  emailVerified: claims.email_verified === true || claims.email_verified === "true",
+  name: claims.name,
+});
 
 // ---------- Google One Tap (ID token posted by Google's script) ----------
 // Unlike the redirect flow, this token arrives from the browser, so its
@@ -665,8 +665,8 @@ async function googleKey(kid) {
 async function verifyGoogleIdToken(token, nonce) {
   const parts = String(token || "").split(".");
   if (parts.length !== 3) throw new Error("malformed token");
-  const header = JSON.parse(Buffer.from(parts[0], "base64url").toString());
-  const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+  const header = jwtPart(parts[0]);
+  const claims = jwtPart(parts[1]);
   if (header.alg !== "RS256") throw new Error(`unexpected alg ${header.alg}`);
   const key = await googleKey(header.kid);
   if (!key) throw new Error("unknown signing key");
@@ -674,7 +674,7 @@ async function verifyGoogleIdToken(token, nonce) {
   if (!signed) throw new Error("bad signature");
   const now = Date.now() / 1000;
   if (claims.aud !== GOOGLE_ID) throw new Error("token is for another app");
-  if (!["accounts.google.com", "https://accounts.google.com"].includes(claims.iss)) throw new Error(`bad issuer ${claims.iss}`);
+  if (!GOOGLE_ISSUERS.includes(claims.iss)) throw new Error(`bad issuer ${claims.iss}`);
   if (!(claims.exp > now - 60) || claims.iat > now + 60) throw new Error("token expired");
   if (!nonce || claims.nonce !== nonce) throw new Error("nonce mismatch");
   return claims;
@@ -767,10 +767,7 @@ const server = http.createServer(async (req, res) => {
         console.warn(`Google One Tap failed (${clientIp(req)}): ${err.message}`);
         return json(res, 401, { error: "Google sign-in failed, try again." });
       }
-      const result = accounts.signInWithGoogle(
-        { sub: claims.sub, email: claims.email, emailVerified: claims.email_verified === true || claims.email_verified === "true", name: claims.name },
-        readSites()
-      );
+      const result = accounts.signInWithGoogle(googleUser(claims), readSites());
       if (result.error) return json(res, 403, { error: result.error });
       console.log(`Google One Tap sign-in: ${result.user.email}`);
       startSession(res, req, result.user);
@@ -778,11 +775,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (route("POST", "/api/login")) {
       const ip = clientIp(req);
-      if (tooManyFailures(ip)) return json(res, 429, { error: "Too many attempts. Try again in 15 minutes." });
+      if (overLimit(failures, ip, 10)) return json(res, 429, { error: "Too many attempts. Try again in 15 minutes." });
       const { email, password } = (await readBody(req)) || {};
       const found = await accounts.signInWithPassword(email, password);
       if (!found) {
-        noteFailure(ip);
+        noteAttempt(failures, ip);
         return json(res, 401, { error: "Wrong email or password." });
       }
       startSession(res, req, found);
@@ -808,12 +805,10 @@ const server = http.createServer(async (req, res) => {
 
     // ---------- Tiles ----------
     if (route("GET", "/api/sites")) {
-      await Promise.all([loadBrands(), loadDashIcons()]);
-      return json(res, 200, withBrands(user ? user.sites : readSites()));
+      return json(res, 200, await withBrands(user ? user.sites : readSites()));
     }
     if (route("GET", "/api/default")) {
-      await Promise.all([loadBrands(), loadDashIcons()]);
-      return json(res, 200, withBrands(readSites()));
+      return json(res, 200, await withBrands(readSites()));
     }
     if (route("GET", "/api/preview")) {
       // Thumbnails for the Logo picker; only URLs logoOptions just offered.
@@ -824,13 +819,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && pathname.startsWith("/api/dash/")) {
       const name = pathname.slice("/api/dash/".length);
-      const svg = dashNames?.has(name) && (await getDashIcon(name).catch(() => null));
+      const svg = dashNames?.has(name) && (await cachedSvg(DI_DIR, name, `${DI_BASE}/svg/${name}.svg`).catch(() => null));
       if (!svg) return json(res, 404, { error: "no logo" });
       return sendImage(res, "image/svg+xml", svg, "public, max-age=604800");
     }
     if (req.method === "GET" && pathname.startsWith("/api/logo/")) {
       const slug = pathname.slice("/api/logo/".length);
-      const svg = brands && brands.has(slug) && (await getLogo(slug).catch(() => null));
+      const svg = brands && brands.has(slug) && (await cachedSvg(LOGO_DIR, slug, `${SI_BASE}/icons/${slug}.svg`).catch(() => null));
       if (!svg) return json(res, 404, { error: "no logo" });
       return sendImage(res, "image/svg+xml", svg, "public, max-age=604800");
     }
@@ -844,10 +839,8 @@ const server = http.createServer(async (req, res) => {
     // ---------- Sign in with your phone: car side (signed out) ----------
     if (route("POST", "/api/pair/start")) {
       const ip = clientIp(req);
-      const f = pairStarts.get(ip);
-      if (f && Date.now() - f.since < 15 * 60_000 && f.count >= 20) return json(res, 429, { error: "Too many attempts. Try again later." });
-      if (!f || Date.now() - f.since >= 15 * 60_000) pairStarts.set(ip, { count: 1, since: Date.now() });
-      else f.count++;
+      if (overLimit(pairStarts, ip, 20)) return json(res, 429, { error: "Too many attempts. Try again later." });
+      noteAttempt(pairStarts, ip);
       const id = crypto.randomBytes(24).toString("base64url");
       const code = newPairCode();
       pairs.set(id, { code, created: Date.now(), status: "pending", userId: null });
@@ -888,8 +881,7 @@ const server = http.createServer(async (req, res) => {
       if (!sites) return json(res, 400, { error: "invalid site list" });
       if (isDefault) writeSites(sites);
       else accounts.setSites(user, sites);
-      await Promise.all([loadBrands(), loadDashIcons()]);
-      return json(res, 200, withBrands(sites));
+      return json(res, 200, await withBrands(sites));
     }
     if (route("GET", "/api/preview-url")) {
       // Live preview of an Icon URL typed in the edit box (signed-in users only):
@@ -927,6 +919,12 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith("/api/admin/")) {
       if (!user.admin) return json(res, 403, { error: "Admins only." });
       const inviteLink = (i) => ({ ...i, link: `${publicOrigin(req)}/?invite=${i.token}` });
+      // Email a new or renewed invite; the reply says whether that worked.
+      const sendInvite = async (invite) => {
+        const withLink = inviteLink(invite);
+        const emailError = await emailInvite(invite, withLink.link, user);
+        return json(res, 200, { ...withLink, emailed: !emailError, emailError: emailError || undefined });
+      };
       if (route("GET", "/api/admin/people")) {
         const p = accounts.people();
         return json(res, 200, { ...p, invites: p.invites.map(inviteLink), email: !!mailer });
@@ -937,24 +935,19 @@ const server = http.createServer(async (req, res) => {
         const picked = Array.isArray(tiles) ? user.sites.filter((t) => tiles.includes(t.id)) : [];
         const invite = accounts.createInvite(email, picked);
         if (!invite) return json(res, 400, { error: "That doesn't look like an email address." });
-        const withLink = inviteLink(invite);
-        const isReset = !!accounts.byEmail(invite.email);
-        const emailError = await emailInvite(invite, withLink.link, user, isReset);
-        return json(res, 200, { ...withLink, emailed: !emailError, emailError: emailError || undefined });
+        return sendInvite(invite);
       }
       if (req.method === "POST" && pathname.startsWith("/api/admin/invites/") && pathname.endsWith("/renew")) {
         // Expired invite -> fresh 14-day link (same email + tiles), emailed again.
         const invite = accounts.renewInvite(pathname.slice("/api/admin/invites/".length, -"/renew".length));
         if (!invite) return json(res, 404, { error: "That invite no longer exists." });
-        const withLink = inviteLink(invite);
-        const emailError = await emailInvite(invite, withLink.link, user, !!accounts.byEmail(invite.email));
-        return json(res, 200, { ...withLink, emailed: !emailError, emailError: emailError || undefined });
+        return sendInvite(invite);
       }
       if (req.method === "POST" && pathname.startsWith("/api/admin/invites/") && pathname.endsWith("/resend")) {
         const token = pathname.slice("/api/admin/invites/".length, -"/resend".length);
         const invite = accounts.findInvite(token);
         if (!invite) return json(res, 404, { error: "That invite has expired." });
-        const emailError = await emailInvite(invite, inviteLink(invite).link, user, !!accounts.byEmail(invite.email));
+        const emailError = await emailInvite(invite, inviteLink(invite).link, user);
         return emailError ? json(res, 502, { error: `Couldn't send: ${emailError}` }) : json(res, 200, { ok: true });
       }
       if (req.method === "DELETE" && pathname.startsWith("/api/admin/invites/")) {
