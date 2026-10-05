@@ -61,9 +61,34 @@
   function toast(msg, ms = 2600) {
     const t = $("toast");
     t.textContent = msg;
-    t.hidden = false;
+    // Re-show so it stacks above a modal opened since the last toast.
+    if (t.matches(":popover-open")) t.hidePopover();
+    t.showPopover();
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => (t.hidden = true), ms);
+    toast.timer = setTimeout(() => t.hidePopover(), ms);
+  }
+
+  // Disable a button while its action runs, so a tap visibly registers.
+  async function pressed(b, fn) {
+    if (b.disabled) return;
+    b.disabled = true;
+    try {
+      await fn(b);
+    } finally {
+      b.disabled = false;
+    }
+  }
+
+  // Briefly swap a button's label to confirm it worked.
+  function flashDone(b, label) {
+    const orig = b.dataset.label ??= b.textContent;
+    b.textContent = label;
+    b.classList.add("done");
+    clearTimeout(b.doneTimer);
+    b.doneTimer = setTimeout(() => {
+      b.textContent = orig;
+      b.classList.remove("done");
+    }, 1800);
   }
 
   function normalizeUrl(raw) {
@@ -908,6 +933,7 @@
     try {
       await navigator.clipboard.writeText(msg);
       toast("Invite message copied: paste it into a text or email");
+      return true;
     } catch {
       prompt("Copy this and send it:", msg);
     }
@@ -926,8 +952,10 @@
     try {
       await navigator.clipboard.writeText(link);
       toast("Invite link copied");
+      return true;
     } catch {
       prompt("Copy this invite link:", link);
+      return false;
     }
   }
 
@@ -967,7 +995,7 @@
         b.type = "button";
         b.className = `pill small ${cls}`;
         b.textContent = label;
-        b.onclick = fn;
+        b.onclick = () => pressed(b, fn);
         acts.append(b);
       }
       r.append(text, acts);
@@ -1013,16 +1041,20 @@
         continue;
       }
       row(i.email, `${i.existing ? "Password reset link · " : ""}Expires ${fmtDate(i.expires)}${carries}`, [
-        ...(data.email ? [["Resend email", "", async () => {
+        ...(data.email ? [["Resend email", "", async (b) => {
+          b.textContent = "Sending…";
           try {
             await api(`/api/admin/invites/${i.token}/resend`, { method: "POST", body: "{}" });
+            b.textContent = "Resend email";
+            flashDone(b, "Sent ✓");
             toast(`Emailed ${i.email} again`);
           } catch (err) {
+            b.textContent = "Resend email";
             toast(err.message, 5000);
           }
         }]] : []),
-        ["Share", "", () => shareInvite(i)],
-        ["Copy link", "", () => copyLink(i.link)],
+        ["Share", "", async (b) => { if (await shareInvite(i)) flashDone(b, "Copied ✓"); }],
+        ["Copy link", "", async (b) => { if (await copyLink(i.link)) flashDone(b, "Copied ✓"); }],
         ["Cancel", "danger", async () => {
           await api(`/api/admin/invites/${i.token}`, { method: "DELETE" });
           openPeople();
