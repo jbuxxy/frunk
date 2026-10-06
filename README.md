@@ -56,6 +56,11 @@ docker compose logs frunk   # prints a one-time link to set the admin password
 Open the link from the log, choose a password, and you're the admin. Put Frunk
 behind HTTPS (any reverse proxy) before using it from the car.
 
+To skip the build, use the published image instead: every push to `main` that
+passes the tests is published as `ghcr.io/jbuxxy/frunk:latest`. In
+`docker-compose.yml`, replace the `build: .` and `image: frunk:local` lines with
+`image: ghcr.io/jbuxxy/frunk:latest`, then run `docker compose up -d`.
+
 ## Configuration
 
 All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
