@@ -26,6 +26,10 @@ for (const entry of (process.env.TRUSTED_PROXIES || "127.0.0.1,::1").split(",").
   if (bits) TRUSTED_PROXIES.addSubnet(addr, Number(bits), type);
   else TRUSTED_PROXIES.addAddress(addr, type);
 }
+// The release (package.json, bumped when a vYYYY.M.N tag is cut) and the commit
+// this image was built from — main ships between releases, so both are shown.
+const APP_VERSION = require("./package.json").version;
+const BUILD = (process.env.FRUNK_BUILD_SHA || "").trim().slice(0, 7) || undefined;
 // Changes every server start (i.e. every deploy), so browsers never keep stale CSS/JS.
 const ASSET_VERSION = Date.now().toString(36);
 
@@ -789,6 +793,8 @@ on("GET", "/api/me", "anyone", ({ res, user }) => json(res, 200, {
   user: user && { ...publicUser(user), pickColor: !!user.pickColor },
   google: !!(GOOGLE_ID && GOOGLE_SECRET),
   googleClientId: GOOGLE_ID || undefined,
+  version: APP_VERSION,
+  build: BUILD,
 }));
 on("GET", "/auth/google", "anyone", ({ req, res }) => {
   if (!GOOGLE_ID) return redirect(res, "/?signin_error=not_setup");

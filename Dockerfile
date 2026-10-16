@@ -1,7 +1,11 @@
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production DATA_DIR=/data
-COPY server.js accounts.js mailer.js fetcher.js ./
+COPY package.json server.js accounts.js mailer.js fetcher.js ./
+# The commit this image was built from, shown with the version in the account
+# menu. Set by CI; empty for a local build.
+ARG FRUNK_BUILD_SHA=""
+ENV FRUNK_BUILD_SHA=${FRUNK_BUILD_SHA}
 COPY public ./public
 RUN mkdir -p /data && chown node:node /data
 USER node

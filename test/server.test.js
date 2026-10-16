@@ -53,6 +53,7 @@ test("sign-in, sign-out and the password lockout", async (t) => {
   const ok = await login("right-password");
   assert.equal(ok.status, 200);
   assert.equal((await srv.request("GET", "/api/me", { cookie: ok.cookie })).body.user.email, "owner@example.com");
+  assert.equal((await srv.request("GET", "/api/me")).body.version, require("../package.json").version);
   await srv.request("POST", "/api/logout", { cookie: ok.cookie, body: {} });
   assert.equal((await srv.request("GET", "/api/me", { cookie: ok.cookie })).body.user, null);
 

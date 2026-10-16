@@ -372,6 +372,7 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
   font-size: 44px; letter-spacing: .18em; margin: 6px 0 8px;
 }
 .hint.center { text-align: center; }
+.hint.version { font-size: 13px; margin-top: 14px; }
 .code-input { text-align: center; text-transform: uppercase; font-family: var(--display) !important; font-weight: 700; font-size: 34px !important; letter-spacing: .25em; }
 
 /* Invite: starter tiles */

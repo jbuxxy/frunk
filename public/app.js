@@ -774,6 +774,7 @@
     $("accountEmail").textContent = me.user.email;
     $("editDefaultBtn").hidden = !me.user.admin;
     $("peopleBtn").hidden = !me.user.admin;
+    $("appVersion").textContent = me.version ? `Version ${me.version}${me.build ? ` · build ${me.build}` : ""}` : "";
     paintAvatar($("accountAvatar"), avatarColor());
     accountDialog.showModal();
   };
