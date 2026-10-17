@@ -2,6 +2,13 @@
   <img src="docs/wordmark.svg" alt="Frunk" width="360">
 </h1>
 
+<p align="center">
+  <a href="https://github.com/jbuxxy/frunk/actions/workflows/test.yml"><img src="https://github.com/jbuxxy/frunk/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/jbuxxy/frunk/releases"><img src="https://img.shields.io/github/v/release/jbuxxy/frunk?color=de2d30" alt="Latest release"></a>
+  <a href="https://github.com/jbuxxy/frunk/pkgs/container/frunk"><img src="https://img.shields.io/badge/ghcr.io-jbuxxy%2Ffrunk-de2d30?logo=docker&logoColor=white" alt="Docker image"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-de2d30" alt="MIT license"></a>
+</p>
+
 A big-button, fullscreen site launcher for the Tesla in-car browser.
 
 Frunk gives the car's browser a home screen of large, Theater-style tiles for the
