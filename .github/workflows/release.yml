@@ -1,0 +1,40 @@
+name: Nightly release
+
+# Each night, cuts a vYYYY.M.N release if main has releasable commits since
+# the last tag (.github/scripts/nightly-release.sh has the rules), then
+# dispatches test.yml for the tag (its publish job builds :X + :stable).
+# Run it by hand from the Actions tab; "dry run" prints the notes without
+# releasing.
+on:
+  schedule:
+    # 11:45 PM Denver during daylight time, 10:45 PM in winter.
+    - cron: "45 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the release notes without creating a release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: .github/scripts/nightly-release.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_TITLE: Frunk
+          PUBLISH_WORKFLOW: test.yml
+          DRY_RUN: ${{ inputs.dry_run || false }}

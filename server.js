@@ -26,9 +26,10 @@ for (const entry of (process.env.TRUSTED_PROXIES || "127.0.0.1,::1").split(",").
   if (bits) TRUSTED_PROXIES.addSubnet(addr, Number(bits), type);
   else TRUSTED_PROXIES.addAddress(addr, type);
 }
-// The release (package.json, bumped when a vYYYY.M.N tag is cut) and the commit
-// this image was built from — main ships between releases, so both are shown.
-const APP_VERSION = require("./package.json").version;
+// The release (FRUNK_VERSION from CI — the vYYYY.M.N tag, or the latest one for
+// a main build — else package.json's) and the commit this image was built
+// from — main ships between releases, so both are shown.
+const APP_VERSION = (process.env.FRUNK_VERSION || "").trim() || require("./package.json").version;
 const BUILD = (process.env.FRUNK_BUILD_SHA || "").trim().slice(0, 7) || undefined;
 // Changes every server start (i.e. every deploy), so browsers never keep stale CSS/JS.
 const ASSET_VERSION = Date.now().toString(36);

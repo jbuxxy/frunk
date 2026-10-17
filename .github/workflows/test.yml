@@ -7,6 +7,8 @@ on:
     # :stable on top of the :latest every push to main already gets.
     tags: ["v*"]
   pull_request:
+  # The nightly release (release.yml) dispatches this for its new tag.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -59,7 +61,7 @@ jobs:
   # Publishes ghcr.io/<owner>/frunk once everything above passes on main, so
   # deployments pull a tested image instead of building from source.
   publish:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [test, browser, docker]
     runs-on: ubuntu-latest
     permissions:
@@ -74,14 +76,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # main -> :latest; a vX tag -> :X + :stable (what a self-hoster pins
-      # to). Both also get :<sha>.
+      # to). Both also get :<sha>. The version comes from the tag (main
+      # builds: the latest release's), not package.json — the nightly
+      # release (release.yml) only tags.
       - id: tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           img="ghcr.io/${GITHUB_REPOSITORY,,}"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "tags=$img:${GITHUB_REF#refs/tags/v},$img:stable,$img:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           else
             echo "tags=$img:latest,$img:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+            echo "version=${latest#v}" >> "$GITHUB_OUTPUT"
           fi
       - uses: docker/build-push-action@v7
         with:
@@ -89,6 +98,7 @@ jobs:
           push: true
           build-args: |
             FRUNK_BUILD_SHA=${{ github.sha }}
+            FRUNK_VERSION=${{ steps.tags.outputs.version }}
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
