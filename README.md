@@ -51,7 +51,8 @@ the browser into fullscreen with one tap.
   phone, and the car is signed in. There's no typing on the car's screen.
 - **Watch Party.** Watch together from different cars (or phones): one person
   hosts, everyone else sees a **Join** button, and playback stays in step on
-  every screen. The host picks who else may play, pause and skip. For now it
+  every screen, with a chat, emoji and one-tap reactions that float over the
+  video. The host picks who else may play, pause and skip. For now it
   plays a test video, for admins; Plex, Audiobookshelf and other apps that can
   stream into it come next.
 - **No dependencies.** A single Node.js server with no npm packages, and a
@@ -122,6 +123,7 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `public/vendor/qrcode.min.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT |
 | `public/party.js` | Watch Party: Host and Join, the party screen, playback kept in step |
 | `public/vendor/hls.min.js` | [hls.js](https://github.com/video-dev/hls.js) 1.5.17, Apache-2.0 |
+| `public/vendor/twemoji/` | Chat emoji from [Twemoji](https://github.com/jdecked/twemoji) 15.1.0, graphics CC-BY 4.0 |
 | `public/fonts/` | Inter and Rajdhani (Latin subset), SIL Open Font License |
 | `test/` | Unit, API and browser tests |
 

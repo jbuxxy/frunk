@@ -317,6 +317,9 @@ async function events(srv, path, cookie) {
         text += new TextDecoder().decode((await reader.read()).value);
       }
     },
+    async nextOf(type) {
+      for (;;) { const msg = await this.next(); if (msg.type === type) return msg; }
+    },
     close: () => reader.cancel(),
   };
 }
@@ -353,7 +356,8 @@ test("watch party: hosting, joining, who controls what", async (t) => {
   assert.equal((await hostEvents.next()).type, "party");
   assert.equal((await srv.request("GET", `/api/party/${code}/events/${host.member}`, { cookie: member })).status, 404);
   const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, member);
-  await guestEvents.next();
+  await guestEvents.next(); // the party
+  await guestEvents.next(); // what's been said so far
 
   // The guest can't choose or control until the host allows it.
   const control = (cookie, m, body) => post(`/api/party/${code}/control`, cookie, { member: m, ...body });
@@ -390,4 +394,38 @@ test("watch party: hosting, joining, who controls what", async (t) => {
   do msg = await lobby.next(); while (msg.parties.length);
   assert.equal((await post(`/api/party/${code}/join`, member)).status, 404);
   await Promise.all([lobby.close(), hostEvents.close()]);
+});
+
+test("watch party chat: messages, history for newcomers, reactions", async (t) => {
+  const { srv, admin, member } = await serverWithPeople();
+  t.after(() => srv.stop());
+  const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
+  const { code } = (await post("/api/party", admin)).body;
+  const host = (await post(`/api/party/${code}/join`, admin)).body;
+  const hostEvents = await events(srv, `/api/party/${code}/events/${host.member}`, admin);
+  assert.deepEqual([(await hostEvents.next()).type, (await hostEvents.next()).messages], ["party", []]);
+  const say = (cookie, m, body) => post(`/api/party/${code}/chat`, cookie, { member: m, ...body });
+
+  assert.equal((await say(member, host.member, { text: "not mine" })).status, 400);
+  assert.equal((await say(admin, host.member, { text: "   " })).status, 400);
+  assert.equal((await say(admin, host.member, { text: "x".repeat(501) })).status, 400);
+  assert.equal((await say(admin, host.member, { text: " Popcorn ready? 🍿 " })).status, 200);
+  const { message } = await hostEvents.nextOf("chat");
+  assert.deepEqual([message.name, message.text], ["owner", "Popcorn ready? 🍿"]);
+
+  // Someone joining later gets what's been said.
+  const guest = (await post(`/api/party/${code}/join`, member)).body;
+  const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, member);
+  await guestEvents.next();
+  assert.deepEqual((await guestEvents.nextOf("chat-history")).messages.map((m) => m.text), ["Popcorn ready? 🍿"]);
+
+  assert.equal((await say(member, guest.member, { reaction: "💩" })).status, 400);
+  assert.equal((await say(member, guest.member, { reaction: "😂" })).status, 200);
+  assert.deepEqual(await hostEvents.nextOf("react"), { type: "react", reaction: "😂", name: "Member", color: null });
+
+  // Bursts are capped per person; reactions don't count against messages.
+  for (let i = 0; i < 7; i++) assert.equal((await say(member, guest.member, { reaction: "🔥" })).status, 200);
+  assert.equal((await say(member, guest.member, { reaction: "🔥" })).status, 400);
+  assert.equal((await say(member, guest.member, { text: "still fine" })).status, 200);
+  await Promise.all([hostEvents.close(), guestEvents.close()]);
 });

@@ -11,6 +11,10 @@ const HOST_GONE_MS = 15 * 60_000; // the party ends this long after the host's l
 const MAX_AGE_MS = 12 * 60 * 60_000;
 const MAX_POSITION = 24 * 3600;
 const MODES = ["host", "everyone", "copilots"];
+const CHAT_KEEP = 100; // messages a newcomer (or a reload) gets to scroll back through
+const CHAT_MAX_CHARS = 500;
+const CHAT_BURST = { count: 8, ms: 10_000 }; // per person, messages and reactions each
+const REACTIONS = ["😂", "😮", "❤️", "👏", "🔥", "😢"];
 
 // sourcesFor(userId): the apps that person can host from, each
 // { id, name, hosts: [tile hostnames], items: [{ id, title, kind, src }] }.
@@ -152,6 +156,8 @@ function createParties({ sourcesFor, person }) {
         mode: "host", copilots: new Set(),
         media: null, playing: false, position: 0, at: Date.now(),
         members: new Map(), // memberId -> { userId, streams: Set(res), lastSeen }
+        chat: [], // { id, at, name, color, text }
+        sent: new Map(), // userId -> recent message/reaction times, for the burst limit
       });
       lobbyUpdate();
       return code;
@@ -183,6 +189,7 @@ function createParties({ sourcesFor, person }) {
       m.streams.add(res);
       m.lastSeen = Date.now();
       send(res, { type: "party", party: snapshot(p, userId), event: null });
+      send(res, { type: "chat-history", messages: p.chat });
       if (m.userId === p.hostId) broadcast(p); // the host is back
       return true;
     },
@@ -245,6 +252,35 @@ function createParties({ sourcesFor, person }) {
       if (!p) return "That party has ended.";
       if (p.hostId !== userId) return "Only the host can end the party.";
       end(p, (person(userId) || {}).name);
+      return null;
+    },
+
+    // Chat: text, or a reaction (one of REACTIONS) that floats over everyone's
+    // video and isn't kept. Returns an error message, or null.
+    chat(code, memberId, userId, { text, reaction } = {}) {
+      const p = find(code);
+      if (!memberOf(p, memberId, userId)) return "You're not in that party.";
+      const now = Date.now();
+      const kind = reaction !== undefined ? "react" : "chat";
+      const key = `${userId} ${kind}`;
+      const recent = (p.sent.get(key) || []).filter((t) => now - t < CHAT_BURST.ms);
+      if (recent.length >= CHAT_BURST.count) return "Slow down a little.";
+      const who = person(userId) || { name: "Someone", color: null };
+      let msg;
+      if (kind === "react") {
+        if (!REACTIONS.includes(reaction)) return "Unknown reaction.";
+        msg = { type: "react", reaction, name: who.name, color: who.color };
+      } else {
+        text = String(text || "").trim();
+        if (!text) return "Type a message first.";
+        if (text.length > CHAT_MAX_CHARS) return `Keep it under ${CHAT_MAX_CHARS} characters.`;
+        const message = { id: crypto.randomBytes(6).toString("base64url"), at: now, name: who.name, color: who.color, text };
+        p.chat.push(message);
+        if (p.chat.length > CHAT_KEEP) p.chat.shift();
+        msg = { type: "chat", message };
+      }
+      p.sent.set(key, [...recent, now]);
+      for (const m of p.members.values()) for (const res of m.streams) send(res, msg);
       return null;
     },
 

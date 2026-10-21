@@ -58,6 +58,10 @@
       <button class="icon-btn" id="partySettingsBtn" aria-label="Who can control playback">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
       </button>
+      <button class="icon-btn party-chat-btn" id="partyChatBtn" aria-label="Chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>
+        <span class="party-unread" id="partyUnread" hidden></span>
+      </button>
       <button class="icon-btn" id="partyMinimize" aria-label="Home screen">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
       </button>
@@ -78,10 +82,27 @@
       <input type="range" class="party-seek" id="partySeek" min="0" max="1" step="any" value="0" aria-label="Position">
       <span class="party-time" id="partyTime"></span>
       <button class="pill" id="partyChoose">Choose</button>
+      <div class="party-reacts" id="partyReacts"></div>
     </div>
+    <div class="party-floats" id="partyFloats" aria-hidden="true"></div>
+    <aside class="party-chat" id="partyChat" hidden>
+      <div class="party-chat-head">
+        <h3>Chat</h3>
+        <button class="icon-btn" id="partyChatClose" aria-label="Close chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="party-chat-list" id="partyChatList" role="log" aria-live="polite"></div>
+      <div class="party-emoji" id="partyEmoji"></div>
+      <form class="party-chat-form" id="partyChatForm">
+        <input name="text" maxlength="500" placeholder="Message" autocomplete="off" enterkeyhint="send">
+        <button type="submit" class="pill accent">Send</button>
+      </form>
+    </aside>
     <p class="party-who" id="partyWho"></p>
     <button class="party-mini-bar" id="partyExpand" aria-label="Open the party">
       <span id="partyMiniTitle"></span>
+      <span class="party-unread" id="partyMiniUnread" hidden></span>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
     </button>
   </section>

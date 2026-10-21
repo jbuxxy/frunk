@@ -148,6 +148,9 @@
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === "party") update(msg.party, msg.event);
+      else if (msg.type === "chat-history") showHistory(msg.messages);
+      else if (msg.type === "chat") addMessage(msg.message);
+      else if (msg.type === "react") floatReaction(msg);
       else if (msg.type === "ended") finish(msg.by ? `${msg.by} ended the party.` : "The party has ended.");
     };
     // Closed for good (the server said no): rejoin, which also tells us if it ended.
@@ -167,6 +170,11 @@
     party = null;
     store.del("frunk-party");
     unload();
+    closeChat();
+    unread = 0;
+    showUnread();
+    $("partyChatList").replaceChildren();
+    $("partyFloats").replaceChildren();
     view.hidden = true;
     document.body.classList.remove("in-party");
     for (const id of ["partyPicker", "partySettings", "partyInvite"]) if ($(id).open) $(id).close();
@@ -242,7 +250,7 @@
   function wake() {
     view.classList.remove("idle");
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { if (party && party.state.playing) view.classList.add("idle"); }, 4000);
+    idleTimer = setTimeout(() => { if (party && party.state.playing && $("partyChat").hidden) view.classList.add("idle"); }, 4000);
   }
   view.addEventListener("pointerdown", wake);
 
@@ -387,6 +395,146 @@
     if (Number.isFinite(video.duration)) seek.max = video.duration;
     seek.value = at;
     $("partyTime").textContent = times(at);
+  }
+
+  // ---------- Chat and reactions ----------
+  const REACTIONS = ["😂", "😮", "❤️", "👏", "🔥", "😢"]; // the server's list
+  // The car's on-screen keyboard has no emoji, so here are the common ones.
+  const EMOJI = ["😂", "❤️", "👍", "😮", "🔥", "👏", "😢", "🎉", "🙌", "😍", "🤔", "👀", "😴", "🍿"];
+  const timeFmt = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+
+  // These emoji are drawn from images (Twemoji, in /vendor/twemoji), so they
+  // look right even where the browser has no emoji font. Others are left to the device.
+  const emojiFile = (ch) => [...ch].map((c) => c.codePointAt(0).toString(16)).filter((h) => h !== "fe0f").join("-");
+  function emojiImg(ch) {
+    const img = document.createElement("img");
+    img.className = "emoji";
+    img.src = `/vendor/twemoji/${emojiFile(ch)}.svg`;
+    img.alt = ch;
+    img.draggable = false;
+    return img;
+  }
+  const emojiRe = new RegExp(`(${[...new Set([...REACTIONS, ...EMOJI])].join("|")})`, "u");
+  // Text with the known emoji as images; never HTML.
+  function richText(el, text) {
+    el.replaceChildren(...text.split(emojiRe).filter(Boolean).map((part) => (emojiRe.test(part) ? emojiImg(part) : document.createTextNode(part))));
+    return el;
+  }
+  let unread = 0;
+
+  async function say(body) {
+    try {
+      await f.api(`/api/party/${session.code}/chat`, { method: "POST", body: JSON.stringify({ member: session.member, ...body }) });
+      return true;
+    } catch (err) {
+      f.toast(err.message, 4000);
+      return false;
+    }
+  }
+
+  function messageEl(m) {
+    const el = document.createElement("div");
+    el.className = "party-msg";
+    const head = document.createElement("div");
+    head.className = "party-msg-head";
+    const when = document.createElement("time");
+    when.textContent = timeFmt.format(new Date(m.at));
+    head.append(dot(m), m.name, when);
+    el.append(head, richText(document.createElement("p"), m.text));
+    return el;
+  }
+  function showHistory(messages) {
+    $("partyChatList").replaceChildren(...messages.map(messageEl));
+    scrollChat();
+  }
+  const scrollChat = () => { const list = $("partyChatList"); list.scrollTop = list.scrollHeight; };
+  function addMessage(m) {
+    const list = $("partyChatList");
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    list.append(messageEl(m));
+    if (atBottom) scrollChat();
+    if (!$("partyChat").hidden || (me && m.name === (me.name || me.email))) return;
+    unread++;
+    showUnread();
+    bubble(m);
+  }
+  function showUnread() {
+    for (const id of ["partyUnread", "partyMiniUnread"]) {
+      $(id).hidden = !unread;
+      $(id).textContent = unread > 9 ? "9+" : unread;
+    }
+  }
+
+  // A message over the video while the chat is closed, gone after a few seconds.
+  function bubble(m) {
+    const el = document.createElement("div");
+    el.className = "party-bubble";
+    el.append(dot(m), richText(document.createElement("span"), m.text));
+    el.onclick = openChat;
+    const floats = $("partyFloats");
+    floats.append(el);
+    while (floats.querySelectorAll(".party-bubble").length > 3) floats.querySelector(".party-bubble").remove();
+    setTimeout(() => el.classList.add("gone"), 5000);
+    setTimeout(() => el.remove(), 5600);
+  }
+
+  // A reaction rises up the right side of everyone's screen.
+  function floatReaction(r) {
+    if (view.hidden || view.classList.contains("mini")) return;
+    const el = document.createElement("div");
+    el.className = "party-float";
+    el.style.right = `${4 + Math.random() * 14}%`;
+    const face = emojiImg(r.reaction);
+    const who = document.createElement("small");
+    who.textContent = r.name;
+    el.append(face, who);
+    $("partyFloats").append(el);
+    setTimeout(() => el.remove(), 3200);
+  }
+
+  function openChat() {
+    $("partyChat").hidden = false;
+    view.classList.add("chatting");
+    unread = 0;
+    showUnread();
+    scrollChat();
+    wake();
+  }
+  function closeChat() {
+    $("partyChat").hidden = true;
+    view.classList.remove("chatting");
+  }
+  $("partyChatBtn").onclick = () => ($("partyChat").hidden ? openChat() : closeChat());
+  $("partyChatClose").onclick = closeChat;
+  $("partyChatForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const input = $("partyChatForm").text;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    if (!(await say({ text }))) input.value = text; // keep it to try again
+  };
+  for (const emoji of EMOJI) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.append(emojiImg(emoji));
+    b.setAttribute("aria-label", `Add ${emoji}`);
+    b.onclick = () => {
+      const input = $("partyChatForm").text;
+      const at = input.selectionStart ?? input.value.length;
+      input.value = input.value.slice(0, at) + emoji + input.value.slice(input.selectionEnd ?? at);
+      input.setSelectionRange(at + emoji.length, at + emoji.length);
+    };
+    $("partyEmoji").append(b);
+  }
+  for (const reaction of REACTIONS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "party-react";
+    b.append(emojiImg(reaction));
+    b.setAttribute("aria-label", `React ${reaction}`);
+    b.onclick = () => say({ reaction });
+    $("partyReacts").append(b);
   }
 
   // ---------- Choosing what plays ----------
