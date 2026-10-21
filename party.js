@@ -18,10 +18,11 @@ const REACTIONS = ["😂", "😮", "❤️", "👏", "🔥", "😢"];
 
 // The apps a host plays from, given by the server:
 //   sourcesFor(userId): [{ id, name, hosts: [tile hostnames] }] that person can host from
-//   browse(userId, sourceId, q): what they could play, [{ id, title, subtitle, kind, art }]
+//   browse(userId, sourceId, q, folder): what they could play, [{ id, title,
+//     subtitle, kind: "video" | "audio" | "folder", art }]; folder opens one
 //   start(userId, sourceId, itemId): { title, subtitle, kind, src } for a public
-//     stream, or { ..., playlist, fetch(file), stop() } for one that members
-//     fetch through Frunk (with the host's key, which never leaves the server)
+//     stream, or { ..., stream } for one members fetch through Frunk with the
+//     host's key, which never leaves the server (apps.js createStream)
 //   art(userId, sourceId, itemId): a fetch Response with the item's cover
 // person(userId): { name, color } or null once the account is gone.
 function createParties({ sourcesFor, browse, start, art, person }) {
@@ -166,7 +167,7 @@ function createParties({ sourcesFor, browse, start, art, person }) {
         code, hostId: userId, created: Date.now(), hostLeftAt: null,
         mode: "host", copilots: new Set(),
         media: null, playing: false, position: 0, at: Date.now(),
-        stream: null, // what's playing, server side: { sourceId, itemId, fetch, stop }
+        stream: null, // what's playing, server side (apps.js createStream)
         loads: 0, // so only the latest of overlapping choices wins
         members: new Map(), // memberId -> { userId, streams: Set(res), lastSeen }
         chat: [], // { id, at, name, color, text }
@@ -226,14 +227,14 @@ function createParties({ sourcesFor, browse, start, art, person }) {
           return err.message || "That couldn't be started.";
         }
         if (load !== p.loads || parties.get(p.code) !== p) {
-          if (item.stop) item.stop(); // overtaken by another choice, or the party ended
+          if (item.stream) item.stream.stop(); // overtaken by another choice, or the party ended
           return null;
         }
         stopStream(p);
-        p.stream = item.fetch ? { sourceId: source.id, itemId: media.id, fetch: item.fetch, stop: item.stop } : null;
+        p.stream = item.stream || null;
         p.media = {
           source: source.id, id: media.id, title: item.title, subtitle: item.subtitle || "", kind: item.kind,
-          src: item.fetch ? `/api/party/${p.code}/stream/${load}/${item.playlist}` : item.src,
+          src: item.stream ? `/api/party/${p.code}/stream/${load}/${item.stream.entry}` : item.src,
           art: item.art ? `/api/party/${p.code}/art/${source.id}/${encodeURIComponent(media.id)}` : null,
         };
         Object.assign(p, { playing: true, position: 0, at: now });
@@ -320,11 +321,11 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       if (!memberOf(p, memberId, userId) || !canChoose(p, userId)) return null;
       return sourcesFor(p.hostId);
     },
-    async browse(code, memberId, userId, sourceId, q) {
+    async browse(code, memberId, userId, sourceId, q, folder) {
       const p = find(code);
       if (!memberOf(p, memberId, userId) || !canChoose(p, userId)) return null;
       if (!sourcesFor(p.hostId).some((s) => s.id === sourceId)) return [];
-      return browse(p.hostId, sourceId, q);
+      return browse(p.hostId, sourceId, q, folder);
     },
 
     // Server side of what's playing, for someone in the party: a stream file

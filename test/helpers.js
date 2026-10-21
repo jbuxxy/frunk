@@ -90,6 +90,64 @@ async function fakeAbs() {
   return abs;
 }
 
+// A small Plex server plus plex.tv (under /tv): code linking, a movie, a show
+// with a season and an episode, search, and the HLS transcoder's nested
+// playlists. Set linked once "the code was entered"; shared: false makes the
+// account one this server isn't shared with. Only X-Plex-Token: server-token
+// gets into the library. started/stopped list transcode sessions.
+async function fakePlex() {
+  const plex = { linked: false, shared: true, started: [], stopped: [], segmentTokens: [] };
+  const movie = { ratingKey: "100", type: "movie", title: "Arrival", year: 2016, thumb: "/t/100" };
+  const show = { ratingKey: "200", type: "show", title: "Bluey", childCount: 3, thumb: "/t/200" };
+  const season = { ratingKey: "201", type: "season", title: "Season 1", parentTitle: "Bluey" };
+  const episode = { ratingKey: "202", type: "episode", title: "Magic Xylophone", grandparentTitle: "Bluey", parentIndex: 1, index: 1, thumb: "/t/202" };
+  const server = http.createServer((req, res) => {
+    const { pathname, searchParams } = new URL(req.url, "http://x");
+    const json = (body) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
+    const list = (Metadata) => json({ MediaContainer: { Metadata } });
+    if (pathname === "/tv/api/v2/pins" && req.method === "POST") return json({ id: 42, code: "ABCD" });
+    if (pathname === "/tv/api/v2/pins/42") return json({ id: 42, authToken: plex.linked ? "account-token" : null });
+    if (pathname === "/tv/api/v2/resources") return json(plex.shared ? [{ clientIdentifier: "machine1", accessToken: "server-token", provides: "server" }] : []);
+    if (pathname === "/tv/api/v2/user") return json({ username: "jordan" });
+    if (pathname === "/identity") return json({ MediaContainer: { machineIdentifier: "machine1" } });
+    if (req.headers["x-plex-token"] !== "server-token") return res.writeHead(401).end();
+    if (pathname === "/library/sections") return json({ MediaContainer: { Directory: [{ key: "1", type: "movie", title: "Movies" }, { key: "2", type: "show", title: "TV Shows" }, { key: "3", type: "photo", title: "Photos" }] } });
+    if (pathname === "/library/sections/1/all") return list([movie]);
+    if (pathname === "/library/sections/2/all") return list([show]);
+    if (pathname === "/library/metadata/200/children") return list([season]);
+    if (pathname === "/library/metadata/201/children") return list([episode]);
+    if (pathname === "/library/onDeck") return list([episode]);
+    const one = { "/library/metadata/100": movie, "/library/metadata/200": show, "/library/metadata/202": episode }[pathname];
+    if (one) return list([one]);
+    if (pathname === "/hubs/search") return json({ MediaContainer: { Hub: [{ Metadata: /blu/i.test(searchParams.get("query")) ? [show, { ratingKey: "9", type: "photo", title: "Bluey photo" }] : [] }] } });
+    const base = "/video/:/transcode/universal";
+    if (pathname === `${base}/start.m3u8`) {
+      plex.started.push(searchParams.get("session"));
+      return res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" }).end(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000\nsession/${searchParams.get("session")}/base/index.m3u8\n`);
+    }
+    let m;
+    if ((m = /^\/video\/:\/transcode\/universal\/session\/([\w-]+)\/base\/index\.m3u8$/.exec(pathname))) {
+      return res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" }).end("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n00000.ts\n#EXT-X-ENDLIST\n");
+    }
+    if (/\/base\/00000\.ts$/.test(pathname)) {
+      plex.segmentTokens.push(req.headers["x-plex-token"]);
+      return res.writeHead(200, { "content-type": "video/mp2t" }).end("plex-seg");
+    }
+    if (pathname === `${base}/stop`) {
+      plex.stopped.push(searchParams.get("session"));
+      return res.writeHead(200).end();
+    }
+    if (pathname === "/photo/:/transcode") return res.writeHead(200, { "content-type": "image/png" }).end(png());
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.unref();
+  plex.base = `http://127.0.0.1:${server.address().port}`;
+  plex.env = { PLEX_URL: plex.base, PLEX_TV_URL: `${plex.base}/tv` };
+  plex.close = () => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+  return plex;
+}
+
 // Starts server.js. seedIndexes writes fresh copies of both logo indexes into
 // DATA_DIR so startup doesn't download them (pass false to test the download).
 async function startServer({ cdn, env = {}, seedIndexes = true, owner = OWNER } = {}) {
@@ -184,4 +242,4 @@ async function serverWithPeople(opts) {
   return { srv, admin, member };
 }
 
-module.exports = { OWNER, ABS_KEY, fakeAbs, fakeCdn, startServer, request, signUp, serverWithPeople, png };
+module.exports = { OWNER, ABS_KEY, fakeAbs, fakePlex, fakeCdn, startServer, request, signUp, serverWithPeople, png };

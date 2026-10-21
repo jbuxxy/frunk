@@ -1039,12 +1039,12 @@ const parties = createParties({
   sourcesFor(userId) {
     const user = userById(userId);
     if (!user) return [];
-    const connected = apps.list.filter((a) => user.apps?.[a.id]).map((a) => ({ id: a.id, name: a.name, hosts: [a.host] }));
+    const connected = apps.list.filter((a) => user.apps?.[a.id]).map((a) => ({ id: a.id, name: a.name, hosts: a.hosts }));
     return [...connected, ...(user.admin ? [TEST_SOURCE] : [])];
   },
-  async browse(userId, sourceId, q) {
+  async browse(userId, sourceId, q, folder) {
     if (sourceId === TEST_SOURCE.id) return TEST_ITEMS.map(({ src, ...item }) => item);
-    return apps.byId(sourceId).browse(tokenFor(userId, sourceId), q);
+    return apps.byId(sourceId).browse(tokenFor(userId, sourceId), q, folder);
   },
   async start(userId, sourceId, itemId) {
     if (sourceId === TEST_SOURCE.id) {
@@ -1052,7 +1052,7 @@ const parties = createParties({
       if (!item) throw new Error("That isn't available.");
       return item;
     }
-    return { kind: "audio", art: true, ...(await apps.byId(sourceId).start(tokenFor(userId, sourceId), itemId)) };
+    return apps.byId(sourceId).start(tokenFor(userId, sourceId), itemId);
   },
   art: (userId, sourceId, itemId) => apps.byId(sourceId)?.art(tokenFor(userId, sourceId), itemId) ?? null,
   person: (userId) => {
@@ -1061,23 +1061,57 @@ const parties = createParties({
   },
 });
 
-// Connected apps: each person's own key for the configured servers.
+// Connected apps: each person's own account on the configured servers, by
+// pasting a key ("key") or entering a code at the app's own site ("link").
 on("GET", "/api/apps", "user", ({ res, user }) => json(res, 200, apps.list.map((a) => ({
-  id: a.id, name: a.name, host: a.host, connected: !!user.apps?.[a.id], account: user.apps?.[a.id]?.account || null,
+  id: a.id, name: a.name, connect: a.connect, help: a.help || null, linkAt: a.linkAt || null, host: a.hosts[0],
+  connected: !!user.apps?.[a.id], account: user.apps?.[a.id]?.account || null,
 }))));
+const appError = (app, err) => (err.status === 401 ? err.message : /^That /.test(err.message) ? err.message : `Couldn't reach ${app.name}.`);
 on("PUT", "/api/apps/:id", "user", async ({ req, res, params, user }) => {
   const app = apps.byId(params.id);
-  if (!app) return json(res, 404, { error: "That app isn't set up on this Frunk." });
+  if (!app || app.connect !== "key") return json(res, 404, { error: "That app isn't set up on this Frunk." });
   const token = String(((await readBody(req)) || {}).token || "").trim();
   if (!token || token.length > 4096) return json(res, 400, { error: "Paste your key first." });
-  let account;
   try {
-    account = await app.account(token);
+    const conn = await app.connectKey(token);
+    accounts.setApp(user, app.id, conn);
+    return json(res, 200, { connected: true, account: conn.account });
   } catch (err) {
-    return json(res, 400, { error: err.status === 401 ? err.message : `Couldn't reach ${app.name}.` });
+    return json(res, 400, { error: appError(app, err) });
   }
-  accounts.setApp(user, app.id, { token, account });
-  return json(res, 200, { connected: true, account });
+});
+// Linking: start gets a code to enter at the app's site; the page then polls.
+const links = new Map(); // `${userId} ${appId}` -> { pinId, created }
+on("POST", "/api/apps/:id/link", "user", async ({ res, params, user }) => {
+  const app = apps.byId(params.id);
+  if (!app || app.connect !== "link") return json(res, 404, { error: "That app isn't set up on this Frunk." });
+  try {
+    const pin = await app.link.start();
+    links.set(`${user.id} ${app.id}`, { pinId: pin.id, created: Date.now() });
+    return json(res, 200, { code: pin.code });
+  } catch (err) {
+    return json(res, 502, { error: appError(app, err) });
+  }
+});
+on("GET", "/api/apps/:id/link", "user", async ({ res, params, user }) => {
+  const app = apps.byId(params.id);
+  const key = `${user.id} ${params.id}`;
+  const pending = links.get(key);
+  if (!app || !pending || Date.now() - pending.created > 15 * 60_000) {
+    links.delete(key);
+    return json(res, 200, { status: "expired" });
+  }
+  try {
+    const conn = await app.link.check(pending.pinId);
+    if (!conn) return json(res, 200, { status: "waiting" });
+    links.delete(key);
+    accounts.setApp(user, app.id, conn);
+    return json(res, 200, { status: "connected", account: conn.account });
+  } catch (err) {
+    links.delete(key);
+    return json(res, 200, { status: "failed", error: appError(app, err) });
+  }
 });
 on("DELETE", "/api/apps/:id", "user", ({ res, params, user }) => {
   accounts.setApp(user, params.id, null);
@@ -1107,33 +1141,36 @@ on("GET", "/api/party/:code/sources/:member", "user", ({ res, params, user }) =>
 on("GET", "/api/party/:code/browse/:member", "user", async ({ res, url, params, user }) => {
   let items;
   try {
-    items = await parties.browse(params.code, params.member, user.id, url.searchParams.get("source"), (url.searchParams.get("q") || "").trim().slice(0, 100));
+    items = await parties.browse(params.code, params.member, user.id, url.searchParams.get("source"),
+      (url.searchParams.get("q") || "").trim().slice(0, 100), url.searchParams.get("in") || "");
   } catch (err) {
     return json(res, 502, { error: err.message });
   }
   if (!items) return json(res, 403, { error: "Only the host can choose what plays." });
   return json(res, 200, items);
 });
-// The playing stream's playlist and segments, fetched from the host's app with
-// the host's key. Playlist entries are rewritten to plain file names, so the
-// player asks for them here too.
+// The playing stream's playlists and pieces, fetched from the host's app with
+// the host's key. Names are aliases the stream handed out (apps.js), and
+// playlists are rewritten so the player only ever asks here.
 on("GET", "/api/party/:code/stream/:load/:file", "user", async ({ req, res, params, user }) => {
-  const upstream = parties.streamFor(params.code, user.id, params.load);
-  if (!upstream || !/^[\w.-]+$/.test(params.file)) return json(res, 404, { error: "not found" });
+  const stream = parties.streamFor(params.code, user.id, params.load);
   let r;
   try {
-    r = await upstream.fetch(params.file);
+    r = stream && (await stream.fetch(params.file, req.headers.range));
   } catch {
     return json(res, 502, { error: "The app didn't answer." });
   }
+  if (!r) return json(res, 404, { error: "not found" });
   if (!r.ok) return json(res, r.status === 404 ? 404 : 502, { error: "not available" });
   const type = r.headers.get("content-type") || "application/octet-stream";
-  if (/\.m3u8$/.test(params.file)) {
-    const text = (await r.text()).split("\n").map((line) => (line && !line.startsWith("#") ? line.split("?")[0].split("/").pop() : line)).join("\n");
+  if (/\.m3u8$/.test(params.file) || /mpegurl/i.test(type)) {
+    const text = stream.rewrite(await r.text(), r.url);
     res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store", "x-content-type-options": "nosniff" });
     return res.end(text);
   }
-  res.writeHead(200, { "content-type": type, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" });
+  const headers = { "content-type": type, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" };
+  for (const h of ["content-length", "content-range", "accept-ranges"]) if (r.headers.get(h)) headers[h] = r.headers.get(h);
+  res.writeHead(r.status, headers);
   const body = Readable.fromWeb(r.body);
   req.on("close", () => body.destroy());
   body.pipe(res);

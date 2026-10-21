@@ -559,6 +559,7 @@
   let pickSources = [];
   let pickSource = null;
   let pickSeq = 0;
+  let pickPath = []; // folders opened, [{ id, title }]
   async function openPicker(only) {
     try {
       pickSources = await f.api(`/api/party/${session.code}/sources/${session.member}`);
@@ -568,6 +569,7 @@
     if (!pickSources.length) return f.toast("Nothing to play from yet.");
     pickSource = pickSources.find((x) => x.id === only) || (pickSource && pickSources.find((x) => x.id === pickSource.id)) || pickSources[0];
     $("partyPickForm").q.value = "";
+    pickPath = [];
     renderTabs();
     $("partyPicker").showModal();
     loadPicks();
@@ -582,6 +584,7 @@
       b.onclick = () => {
         pickSource = x;
         $("partyPickForm").q.value = "";
+        pickPath = [];
         renderTabs();
         loadPicks();
       };
@@ -592,10 +595,13 @@
     const seq = ++pickSeq;
     const box = $("partyPickList");
     const q = $("partyPickForm").q.value.trim();
+    const folder = !q && pickPath.length ? pickPath[pickPath.length - 1] : null;
+    $("partyPickBack").hidden = !folder;
+    $("partyPickWhere").textContent = folder ? folder.title : "";
     box.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "Loading…" }));
     let items;
     try {
-      items = await f.api(`/api/party/${session.code}/browse/${session.member}?${new URLSearchParams({ source: pickSource.id, q })}`);
+      items = await f.api(`/api/party/${session.code}/browse/${session.member}?${new URLSearchParams({ source: pickSource.id, q, in: folder ? folder.id : "" })}`);
     } catch (err) {
       if (seq === pickSeq) box.replaceChildren(Object.assign(document.createElement("p"), { className: "hint error", textContent: err.message }));
       return;
@@ -608,7 +614,7 @@
     box.replaceChildren(...items.map((item) => {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "party-item";
+      b.className = `party-item${item.kind === "folder" ? " folder" : ""}`;
       const art = document.createElement("span");
       art.className = "party-item-art";
       art.textContent = (item.title.trim()[0] || "?").toUpperCase();
@@ -628,6 +634,11 @@
       text.append(title, sub);
       b.append(art, text);
       b.onclick = () => {
+        if (item.kind === "folder") {
+          if (q) $("partyPickForm").q.value = "";
+          pickPath.push({ id: item.id, title: item.title });
+          return loadPicks();
+        }
         $("partyPicker").close();
         f.toast(`Starting ${item.title}…`);
         control("load", { media: { source: pickSource.id, id: item.id } });
@@ -635,6 +646,10 @@
       return b;
     }));
   }
+  $("partyPickBack").onclick = () => {
+    pickPath.pop();
+    loadPicks();
+  };
   let searchTimer = null;
   $("partyPickForm").q.oninput = () => {
     clearTimeout(searchTimer);
@@ -655,9 +670,33 @@
     appList = await f.api("/api/apps").catch(() => []);
     $("appsBtn").hidden = !appList.length;
   }
-  const APP_HELP = {
-    abs: "In Audiobookshelf, open Settings → API Keys, add a key, and paste it here.",
-  };
+  let linkTimer = null;
+  // Plex and the like: a code to enter at the app's own site, then wait.
+  async function startLink(app, box, button) {
+    let r;
+    try {
+      r = await f.api(`/api/apps/${app.id}/link`, { method: "POST", body: "{}" });
+    } catch (err) {
+      return f.toast(err.message, 5000);
+    }
+    const code = document.createElement("div");
+    code.className = "pair-code";
+    code.textContent = r.code;
+    const how = document.createElement("p");
+    how.className = "hint";
+    how.append("On your phone or computer, go to ", Object.assign(document.createElement("b"), { textContent: app.linkAt }), " and enter this code. This screen updates by itself.");
+    button.replaceWith(code, how);
+    const poll = async () => {
+      if (!$("appsDialog").open) return;
+      const s = await f.api(`/api/apps/${app.id}/link`).catch(() => ({ status: "waiting" }));
+      if (s.status === "waiting") return (linkTimer = setTimeout(poll, 2000));
+      if (s.status === "connected") f.toast(`${app.name} connected`);
+      else f.toast(s.error || "That code expired. Try again.", 5000);
+      appsChanged();
+    };
+    clearTimeout(linkTimer);
+    linkTimer = setTimeout(poll, 2000);
+  }
   function renderApps() {
     $("appsList").replaceChildren(...appList.map((app) => {
       const box = document.createElement("div");
@@ -679,8 +718,16 @@
           await appsChanged();
         });
         box.append(off);
+      } else if (app.connect === "link") {
+        note.textContent = `Sign in with your ${app.name} account. You'll get a code to enter on ${app.name}'s site.`;
+        const go = document.createElement("button");
+        go.type = "button";
+        go.className = "pill accent";
+        go.textContent = `Connect ${app.name}`;
+        go.onclick = () => f.pressed(go, () => startLink(app, box, go));
+        box.append(go);
       } else {
-        note.textContent = APP_HELP[app.id] || "Paste your key from the app.";
+        note.textContent = app.help || "Paste your key from the app.";
         const row = document.createElement("div");
         row.className = "invite-row";
         const input = document.createElement("input");
