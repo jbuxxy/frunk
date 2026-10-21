@@ -475,3 +475,101 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
   .bar { gap: 12px; }
   .clock { font-size: 24px; }
 }
+
+/* ---------- Watch Party ---------- */
+.party-dot {
+  width: 30px; height: 30px; border-radius: 50%; flex: none;
+  display: inline-grid; place-items: center;
+  font-family: Inter, system-ui, sans-serif; font-size: 15px; font-weight: 700; letter-spacing: 0;
+}
+.party-dot.live { width: 14px; height: 14px; font-size: 0; box-shadow: 0 0 0 4px rgba(76, 209, 122, .25); animation: party-live 1.6s ease-in-out infinite; }
+@keyframes party-live { 50% { box-shadow: 0 0 0 8px rgba(76, 209, 122, 0); } }
+.pill.party-join { background: rgba(76, 209, 122, .16); color: var(--green); }
+
+/* Tiles while in a party */
+.tile.locked { filter: grayscale(.85) brightness(.45); }
+.tile .party-badge {
+  position: absolute; top: 14px; right: 14px;
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 22px;
+  background: var(--green); color: #0f1114;
+}
+.tile .party-badge svg { fill: currentColor; stroke: none; }
+
+.party {
+  position: fixed; inset: 0; z-index: 20;
+  background: #000; color: #fff;
+  user-select: none;
+}
+.party video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.party-top, .party-controls, .party-who, .party-away { position: absolute; left: 0; right: 0; transition: opacity .3s; }
+.party-top {
+  top: 0; display: flex; align-items: center; gap: 14px;
+  padding: 24px clamp(16px, 3vw, 40px) 48px;
+  background: linear-gradient(rgba(0,0,0,.75), transparent);
+}
+.party-title { flex: 1; min-width: 0; font-family: var(--display); font-size: 30px; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.party-people { display: flex; }
+.party-people .party-dot { width: 44px; height: 44px; font-size: 19px; margin-left: -8px; box-shadow: 0 0 0 3px #000; }
+.party-people .party-dot.host { box-shadow: 0 0 0 3px #000, 0 0 0 5px var(--green); margin-right: 4px; }
+.party-code b { font-family: var(--display); letter-spacing: .18em; }
+.party .pill, .party .icon-btn { background: rgba(40, 44, 52, .85); }
+.party .pill.danger { color: #ff6b6f; }
+.party .pill.accent { background: var(--accent); }
+.party-controls {
+  bottom: 0; display: flex; align-items: center; gap: 16px;
+  padding: 56px clamp(16px, 3vw, 40px) 32px;
+  background: linear-gradient(transparent, rgba(0,0,0,.8));
+}
+.party-play { width: 72px; height: 72px; font-size: 32px; }
+.party-play svg { fill: currentColor; }
+.party-play .i-pause, .party-play.playing .i-play { display: none; }
+.party-play.playing .i-pause { display: block; }
+.party .icon-btn:disabled { opacity: .4; cursor: default; }
+.party-seek { flex: 1; min-width: 80px; accent-color: var(--accent); height: 40px; }
+.party-time { font-size: 19px; font-variant-numeric: tabular-nums; color: #d0d3d8; white-space: nowrap; }
+.party-who { bottom: 8px; margin: 0; text-align: center; font-size: 16px; color: #b8bcc3; pointer-events: none; }
+.party-away { top: 112px; width: max-content; max-width: calc(100% - 32px); margin: 0 auto; padding: 10px 20px; border-radius: 999px; background: rgba(40, 44, 52, .9); font-size: 17px; }
+.party-empty, .party-tap { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.party-empty { display: grid; justify-items: center; gap: 20px; width: min(520px, calc(100% - 32px)); text-align: center; font-size: 22px; }
+.party-empty[hidden] { display: none; }
+.party-empty p { margin: 0; color: #d0d3d8; }
+/* Playing and untouched for a few seconds: just the picture. */
+.party.idle .party-top, .party.idle .party-controls, .party.idle .party-who { opacity: 0; pointer-events: none; }
+.party.idle { cursor: none; }
+
+/* Minimized: a small player in the corner over the home screen. */
+.party-mini-bar { display: none; }
+.party.mini {
+  inset: auto clamp(16px, 3vw, 40px) clamp(16px, 3vw, 40px) auto;
+  width: min(420px, calc(100vw - 32px)); aspect-ratio: 16 / 9;
+  border-radius: 20px; overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.1);
+}
+.party.mini > :not(video):not(.party-mini-bar) { display: none !important; }
+.party.mini .party-mini-bar {
+  position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+  padding: 14px 18px; border: 0; color: #fff; text-align: left;
+  background: linear-gradient(transparent 45%, rgba(0,0,0,.8));
+  font-size: 18px; font-weight: 600;
+}
+.party-mini-bar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.party-mini-bar svg { flex: none; font-size: 26px; }
+body.in-party .grid { padding-bottom: 280px; } /* room to scroll past the mini player */
+
+.party-row { justify-content: flex-start !important; gap: 14px; text-align: left; }
+.party-row.on { box-shadow: var(--ring); }
+.party-tag { margin-left: auto; font-size: 15px; color: var(--muted); }
+.party-row.on .party-tag { color: var(--green); }
+.party-copilots { margin-top: 20px; }
+
+@media (max-width: 640px) {
+  .actions { flex-wrap: wrap; }
+  .party-top { flex-wrap: wrap; padding-top: 16px; gap: 10px; }
+  .party-title { flex-basis: 100%; font-size: 24px; }
+  .party-controls { flex-wrap: wrap; gap: 10px; padding-bottom: 36px; }
+  .party-seek { flex-basis: 100%; order: -1; }
+  .party-time { flex: 1; font-size: 16px; }
+  .party-play { width: 60px; height: 60px; font-size: 26px; }
+  .party-away { top: 150px; }
+}

@@ -26,9 +26,11 @@ test("who can call what", async (t) => {
     ["POST", "/api/admin/invites", { email: "bad" }, 401, 403, 400],
     ["POST", `/api/admin/invites/${invite.body.token}/resend`, {}, 401, 403, 502], // no SMTP set up
     ["DELETE", "/api/admin/users/nobody", undefined, 401, 403, 400],
-    ["POST", "/api/party-test/join", { code: "ZZZZ" }, 401, 404, 404],
-    ["GET", "/api/party-test/events/ZZZZ/nobody", undefined, 401, 404, 404],
-    ["POST", "/api/party-test/signal", { code: "ZZZZ" }, 401, 404, 404],
+    ["GET", "/api/party/sources", undefined, 401, 200, 200],
+    ["POST", "/api/party/ZZZZ/join", {}, 401, 404, 404],
+    ["GET", "/api/party/ZZZZ/events/nobody", undefined, 401, 404, 404],
+    ["POST", "/api/party/ZZZZ/control", { action: "play" }, 401, 400, 400],
+    ["POST", "/api/party/ZZZZ/end", {}, 401, 400, 400],
     ["GET", "/api/no-such-route", undefined, 404, 404, 404],
   ];
   for (const [method, path, body, ...want] of cases) {
@@ -293,6 +295,7 @@ test("static files and headers", async (t) => {
   assert.doesNotMatch(page.body, /__V__/);
   assert.match(page.headers.get("content-security-policy"), /default-src 'self'/);
   assert.equal((await srv.request("GET", "/pair")).status, 200);
+  assert.equal((await srv.request("GET", "/join")).status, 200);
   assert.equal((await srv.request("GET", "/fonts/inter-latin.woff2")).headers.get("content-type"), "font/woff2");
   for (const sneaky of ["/../server.js", "/%2e%2e/server.js", "/..%2fserver.js", "/%E0%A4%A"]) {
     assert.equal((await srv.request("GET", sneaky)).status, 404, sneaky);
@@ -300,53 +303,91 @@ test("static files and headers", async (t) => {
   assert.equal((await srv.request("POST", "/index.html", { body: {} })).status, 405);
 });
 
-test("party car test: two devices meet and pass handshake messages", async (t) => {
+// Reads server-sent events from a GET; next() resolves with the next message.
+async function events(srv, path, cookie) {
+  const res = await fetch(srv.base + path, { headers: { cookie } });
+  assert.equal(res.headers.get("content-type"), "text/event-stream");
+  const reader = res.body.getReader();
+  let text = "";
+  return {
+    async next() {
+      for (;;) {
+        const m = /data: (.*)\n\n/.exec(text);
+        if (m) { text = text.slice(m.index + m[0].length); return JSON.parse(m[1]); }
+        text += new TextDecoder().decode((await reader.read()).value);
+      }
+    },
+    close: () => reader.cancel(),
+  };
+}
+
+test("watch party: hosting, joining, who controls what", async (t) => {
   const { srv, admin, member } = await serverWithPeople();
   t.after(() => srv.stop());
-  const host = await srv.request("POST", "/api/party-test/join", { cookie: admin, body: {} });
-  assert.equal(host.status, 200);
-  assert.match(host.body.code, /^[A-Z2-9]{4}$/);
-  assert.deepEqual(host.body.peers, []);
-  assert.ok(host.body.iceServers.length >= 1);
+  const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
 
-  // The host listens for events before the guest arrives.
-  const events = await fetch(`${srv.base}/api/party-test/events/${host.body.code}/${host.body.id}`, { headers: { cookie: admin } });
-  assert.equal(events.headers.get("content-type"), "text/event-stream");
-  const reader = events.body.getReader();
-  let text = "";
-  const nextEvent = async () => {
-    for (;;) {
-      const m = /data: (.*)\n\n/.exec(text);
-      if (m) { text = text.slice(m.index + m[0].length); return JSON.parse(m[1]); }
-      text += new TextDecoder().decode((await reader.read()).value);
-    }
-  };
+  // Only someone with an app that can host may (for now, admins: the test stream).
+  assert.equal((await srv.request("GET", "/api/party/sources", { cookie: member })).body.length, 0);
+  assert.equal((await post("/api/party", member)).status, 403);
+  const [source] = (await srv.request("GET", "/api/party/sources", { cookie: admin })).body;
+  assert.equal(source.id, "test");
+  assert.equal(source.items[0].src, undefined); // addresses only reach party members
 
-  // Lower case works; someone else can't read the host's events.
-  const guest = await srv.request("POST", "/api/party-test/join", { cookie: member, body: { code: host.body.code.toLowerCase() } });
-  assert.equal(guest.status, 200);
-  assert.deepEqual(guest.body.peers.map((p) => p.name), ["owner"]);
-  assert.equal((await srv.request("GET", `/api/party-test/events/${host.body.code}/${host.body.id}`, { cookie: member })).status, 404);
-  assert.deepEqual(await nextEvent(), { type: "peer-joined", peer: { id: guest.body.id, name: "Member", color: null } });
+  const lobby = await events(srv, "/api/party/lobby", member);
+  assert.deepEqual((await lobby.next()).parties, []);
+  const { code } = (await post("/api/party", admin)).body;
+  assert.match(code, /^[A-Z2-9]{4}$/);
+  assert.equal((await post("/api/party", admin)).body.code, code, "one party per host");
+  assert.deepEqual((await lobby.next()).parties, [{ code, host: { name: "owner", color: null }, title: null, people: 0, mine: false }]);
 
-  const offer = { sdp: { type: "offer", sdp: "v=0" } };
-  const sent = await srv.request("POST", "/api/party-test/signal", { cookie: member, body: { code: host.body.code, from: guest.body.id, to: host.body.id, data: offer } });
-  assert.equal(sent.status, 200);
-  assert.deepEqual(await nextEvent(), { type: "signal", from: guest.body.id, data: offer });
-  // Only as the guest's own account.
-  assert.equal((await srv.request("POST", "/api/party-test/signal", { cookie: admin, body: { code: host.body.code, from: guest.body.id, to: host.body.id, data: offer } })).status, 404);
+  const host = (await post(`/api/party/${code}/join`, admin)).body;
+  assert.equal(host.party.you.host, true);
+  // Rejoining with the same member id (a reload) keeps it; someone else's id doesn't.
+  assert.equal((await post(`/api/party/${code}/join`, admin, { member: host.member })).body.member, host.member);
+  const guest = (await post(`/api/party/${code.toLowerCase()}/join`, member, { member: host.member })).body;
+  assert.notEqual(guest.member, host.member);
+  assert.deepEqual(guest.party.you, { host: false, control: false, choose: false });
+  assert.equal(guest.party.people.length, 2);
 
-  assert.equal((await srv.request("POST", "/api/party-test/join", { cookie: admin, body: { code: host.body.code } })).status, 409);
-  await reader.cancel();
+  const hostEvents = await events(srv, `/api/party/${code}/events/${host.member}`, admin);
+  assert.equal((await hostEvents.next()).type, "party");
+  assert.equal((await srv.request("GET", `/api/party/${code}/events/${host.member}`, { cookie: member })).status, 404);
+  const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, member);
+  await guestEvents.next();
 
-  const report = await srv.request("POST", "/api/party-test/report", { cookie: member, body: { results: { "t-mic": { state: "pass" } } } });
-  assert.equal(report.status, 200);
-  assert.match(srv.log, /Car test results from member@example\.com: .*"t-mic"/);
-  assert.equal((await srv.request("POST", "/api/party-test/report", { cookie: member, body: { x: "a".repeat(9000) } })).status, 400);
+  // The guest can't choose or control until the host allows it.
+  const control = (cookie, m, body) => post(`/api/party/${code}/control`, cookie, { member: m, ...body });
+  assert.equal((await control(member, guest.member, { action: "load", media: { source: "test", id: "bbb" } })).status, 400);
+  assert.equal((await srv.request("GET", `/api/party/${code}/sources/${guest.member}`, { cookie: member })).status, 403);
+  assert.equal((await control(admin, host.member, { action: "load", media: { source: "test", id: "nope" } })).status, 400);
+  assert.equal((await control(admin, host.member, { action: "load", media: { source: "test", id: "bbb" } })).status, 200);
+  const loaded = await guestEvents.next();
+  assert.deepEqual(loaded.event, { kind: "load", by: "owner" });
+  assert.equal(loaded.party.state.media.title, "Big Buck Bunny");
+  assert.match(loaded.party.state.media.src, /\.m3u8$/);
+  assert.equal(loaded.party.state.playing, true);
+  assert.equal((await control(member, guest.member, { action: "pause", position: 5 })).status, 400);
 
-  const page = await srv.request("GET", "/party/test");
-  assert.equal(page.status, 200);
-  assert.match(page.body, /party-test\.js\?v=\w+/);
-  assert.match(page.headers.get("content-security-policy"), /media-src 'self' blob: https:\/\/test-streams\.mux\.dev/);
-  assert.doesNotMatch((await srv.request("GET", "/")).headers.get("content-security-policy"), /mux/);
+  assert.equal((await post(`/api/party/${code}/settings`, member, { member: guest.member, mode: "everyone" })).status, 400);
+  assert.equal((await post(`/api/party/${code}/settings`, admin, { member: host.member, mode: "everyone" })).status, 200);
+  assert.equal((await guestEvents.next()).party.you.control, true);
+  assert.equal((await control(member, guest.member, { action: "pause", position: 12.5 })).status, 200);
+  const paused = await guestEvents.next();
+  assert.deepEqual([paused.event, paused.party.state.playing, paused.party.state.position], [{ kind: "pause", by: "Member" }, false, 12.5]);
+  assert.equal((await control(member, guest.member, { action: "seek", position: -3 })).status, 400);
+
+  // Co-pilots may also choose what plays.
+  await post(`/api/party/${code}/settings`, admin, { member: host.member, mode: "copilots", copilots: [guest.member] });
+  assert.deepEqual((await guestEvents.next()).party.you, { host: false, control: true, choose: true });
+  assert.equal((await srv.request("GET", `/api/party/${code}/sources/${guest.member}`, { cookie: member })).body[0].id, "test");
+
+  // Only the host can end it; everyone is told, and it leaves the lobby.
+  assert.equal((await post(`/api/party/${code}/end`, member)).status, 400);
+  assert.equal((await post(`/api/party/${code}/end`, admin)).status, 200);
+  let msg;
+  do msg = await guestEvents.next(); while (msg.type !== "ended");
+  assert.equal(msg.by, "owner");
+  do msg = await lobby.next(); while (msg.parties.length);
+  assert.equal((await post(`/api/party/${code}/join`, member)).status, 404);
+  await Promise.all([lobby.close(), hostEvents.close()]);
 });
