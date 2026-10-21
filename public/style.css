@@ -563,6 +563,80 @@ body.in-party .grid { padding-bottom: 280px; } /* room to scroll past the mini p
 .party-row.on .party-tag { color: var(--green); }
 .party-copilots { margin-top: 20px; }
 
+/* Chat */
+.party-chat-btn { position: relative; }
+.party-unread {
+  position: absolute; top: -4px; right: -4px; min-width: 24px; height: 24px; padding: 0 6px;
+  border-radius: 12px; background: var(--red); color: #fff;
+  display: grid; place-items: center; font: 700 14px/1 Inter, system-ui, sans-serif; letter-spacing: 0;
+}
+.party-mini-bar .party-unread { position: static; margin-left: auto; }
+.party-reacts { display: flex; gap: 6px; }
+.party-react {
+  width: 52px; height: 52px; border: 0; border-radius: 50%;
+  background: rgba(40, 44, 52, .85); font-size: 26px; line-height: 1;
+  transition: transform .1s;
+}
+.party-react:active { transform: scale(1.25); }
+img.emoji { width: 1.2em; height: 1.2em; vertical-align: -.25em; }
+.party-react img.emoji, .party-emoji img.emoji { width: 28px; height: 28px; vertical-align: middle; }
+.party-float img.emoji { width: 56px; height: 56px; }
+
+.party-chat {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(420px, 100%); z-index: 2;
+  display: flex; flex-direction: column;
+  background: rgba(18, 20, 24, .94); backdrop-filter: blur(8px);
+  box-shadow: -10px 0 40px rgba(0,0,0,.5);
+  user-select: text;
+}
+.party-chat[hidden] { display: none; }
+.party-chat-head { display: flex; align-items: center; justify-content: space-between; padding: 20px 20px 8px 24px; }
+.party-chat-head h3 { margin: 0; font-family: var(--display); font-size: 28px; letter-spacing: .06em; text-transform: uppercase; }
+.party-chat-list { flex: 1; overflow-y: auto; padding: 8px 24px; display: flex; flex-direction: column; gap: 16px; }
+.party-chat-list:empty::before { content: "No messages yet. Say hi!"; color: var(--muted); font-size: 17px; margin: auto; }
+.party-msg-head { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; color: #d0d3d8; }
+.party-msg-head .party-dot { width: 28px; height: 28px; font-size: 14px; }
+.party-msg-head time { margin-left: auto; font-weight: 400; font-size: 14px; color: var(--muted); }
+.party-msg p { margin: 6px 0 0 38px; font-size: 19px; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
+.party-emoji { display: flex; gap: 4px; overflow-x: auto; padding: 8px 16px; scrollbar-width: none; }
+.party-emoji button { flex: none; width: 48px; height: 48px; border: 0; border-radius: 12px; background: transparent; font-size: 26px; }
+.party-emoji button:active { background: var(--raised); }
+.party-chat-form { display: flex; gap: 10px; padding: 8px 16px 20px; }
+.party-chat-form input {
+  flex: 1; min-width: 0; min-height: 56px; padding: 0 18px;
+  border: 2px solid var(--line); border-radius: 16px; background: var(--bg); color: var(--text); font: inherit; font-size: 19px;
+}
+.party-chat-form input:focus { outline: none; border-color: var(--accent); }
+/* The controls make room for the open chat. */
+.party.chatting .party-controls, .party.chatting .party-top { right: min(420px, 100%); }
+.party.chatting .party-who { right: min(420px, 100%); }
+
+.party-floats { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.party-bubble {
+  position: absolute; left: clamp(16px, 3vw, 40px); max-width: min(560px, 70%);
+  display: flex; align-items: center; gap: 12px; padding: 10px 18px 10px 10px;
+  border-radius: 999px; background: rgba(18, 20, 24, .88); font-size: 18px;
+  pointer-events: auto; cursor: pointer; animation: party-in .25s ease-out; transition: opacity .5s;
+}
+.party-bubble span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.party-bubble:nth-last-child(1 of .party-bubble) { bottom: 150px; }
+.party-bubble:nth-last-child(2 of .party-bubble) { bottom: 210px; }
+.party-bubble:nth-last-child(3 of .party-bubble) { bottom: 270px; }
+.party-bubble.gone { opacity: 0; }
+@keyframes party-in { from { opacity: 0; transform: translateY(10px); } }
+.party-float {
+  position: absolute; bottom: 140px; display: grid; justify-items: center;
+  animation: party-rise 3.2s ease-out forwards;
+}
+.party-float small { font-size: 14px; color: #fff; text-shadow: 0 1px 4px #000; }
+@keyframes party-rise {
+  0% { opacity: 0; transform: translateY(0) scale(.6); }
+  12% { opacity: 1; transform: translateY(-40px) scale(1.1); }
+  100% { opacity: 0; transform: translateY(-420px) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .party-float { animation: party-in .3s, party-fade 3.2s forwards; } }
+@keyframes party-fade { 80% { opacity: 1; } 100% { opacity: 0; } }
+
 @media (max-width: 640px) {
   .actions { flex-wrap: wrap; }
   .party-top { flex-wrap: wrap; padding-top: 16px; gap: 10px; }
@@ -572,4 +646,15 @@ body.in-party .grid { padding-bottom: 280px; } /* room to scroll past the mini p
   .party-time { flex: 1; font-size: 16px; }
   .party-play { width: 60px; height: 60px; font-size: 26px; }
   .party-away { top: 150px; }
+  .party-reacts { flex-basis: 100%; justify-content: space-between; }
+  .party-react { width: 46px; height: 46px; font-size: 23px; }
+  /* Chat: a sheet over the lower part of the screen, video still showing above. */
+  .party-chat { top: auto; height: 62%; width: 100%; border-radius: 24px 24px 0 0; }
+  .party.chatting .party-controls, .party.chatting .party-who { display: none; }
+  .party.chatting .party-top { right: 0; }
+  .party-bubble { max-width: calc(100% - 32px); }
+  .party-bubble:nth-last-child(1 of .party-bubble) { bottom: 350px; }
+  .party-bubble:nth-last-child(2 of .party-bubble) { bottom: 410px; }
+  .party-bubble:nth-last-child(3 of .party-bubble) { bottom: 470px; }
+  .party-float { bottom: 360px; }
 }

@@ -1064,10 +1064,10 @@ on("GET", "/api/party/:code/sources/:member", "user", ({ res, params, user }) =>
   if (!sources) return json(res, 403, { error: "Only the host can choose what plays." });
   return json(res, 200, sources.map(publicSource));
 });
-for (const [action, fn] of [["control", "control"], ["settings", "settings"]]) {
+for (const action of ["control", "settings", "chat"]) {
   on("POST", `/api/party/:code/${action}`, "user", async ({ req, res, params, user }) => {
     const body = (await readBody(req)) || {};
-    const error = parties[fn](params.code, body.member, user.id, body);
+    const error = parties[action](params.code, body.member, user.id, body);
     return error ? json(res, 400, { error }) : json(res, 200, { ok: true });
   });
 }
