@@ -46,6 +46,13 @@
   <!-- Watch Party: full screen, or minimized to a corner (.mini) -->
   <section class="party" id="party" hidden>
     <video id="partyVideo" playsinline preload="auto"></video>
+    <div class="party-art" id="partyArt" hidden>
+      <img id="partyArtImg" alt="">
+      <div>
+        <h3 id="partyArtTitle"></h3>
+        <p id="partyArtSub"></p>
+      </div>
+    </div>
     <div class="party-empty" id="partyEmpty">
       <p id="partyEmptyText"></p>
       <button class="pill accent" id="partyEmptyChoose">Choose what to play</button>
@@ -274,6 +281,7 @@
       </div>
       <div class="menu">
         <button type="button" class="pill" id="renameBtn">Edit name</button>
+        <button type="button" class="pill" id="appsBtn" hidden>Connected apps</button>
         <button type="button" class="pill" id="editDefaultBtn" hidden>Edit public page</button>
         <button type="button" class="pill" id="peopleBtn" hidden>People &amp; invites</button>
         <button type="button" class="pill danger" id="signOutBtn">Sign out</button>
@@ -331,11 +339,23 @@
   </dialog>
 
   <!-- Watch Party: what to play -->
-  <dialog class="sheet narrow" id="partyPicker">
-    <form method="dialog">
-      <h2>Choose what to play</h2>
-      <div class="menu" id="partyPickList"></div>
+  <dialog class="sheet party-pick" id="partyPicker">
+    <form method="dialog" id="partyPickForm">
+      <h2 tabindex="-1" autofocus>Choose what to play</h2>
+      <div class="party-tabs" id="partyTabs"></div>
+      <input name="q" type="search" class="party-search" placeholder="Search" autocomplete="off" enterkeyhint="search">
+      <div class="party-results" id="partyPickList"></div>
       <div class="sheet-actions"><span class="spacer"></span><button type="button" class="pill" data-close>Cancel</button></div>
+    </form>
+  </dialog>
+
+  <!-- Watch Party: your accounts on the apps it can play from -->
+  <dialog class="sheet narrow" id="appsDialog">
+    <form method="dialog">
+      <h2>Connected apps</h2>
+      <p class="hint">Connect your own account to host a Watch Party from it. Guests don't need one.</p>
+      <div class="apps-list" id="appsList"></div>
+      <div class="sheet-actions"><span class="spacer"></span><button type="submit" class="pill">Done</button></div>
     </form>
   </dialog>
 

@@ -16,10 +16,15 @@ const CHAT_MAX_CHARS = 500;
 const CHAT_BURST = { count: 8, ms: 10_000 }; // per person, messages and reactions each
 const REACTIONS = ["😂", "😮", "❤️", "👏", "🔥", "😢"];
 
-// sourcesFor(userId): the apps that person can host from, each
-// { id, name, hosts: [tile hostnames], items: [{ id, title, kind, src }] }.
+// The apps a host plays from, given by the server:
+//   sourcesFor(userId): [{ id, name, hosts: [tile hostnames] }] that person can host from
+//   browse(userId, sourceId, q): what they could play, [{ id, title, subtitle, kind, art }]
+//   start(userId, sourceId, itemId): { title, subtitle, kind, src } for a public
+//     stream, or { ..., playlist, fetch(file), stop() } for one that members
+//     fetch through Frunk (with the host's key, which never leaves the server)
+//   art(userId, sourceId, itemId): a fetch Response with the item's cover
 // person(userId): { name, color } or null once the account is gone.
-function createParties({ sourcesFor, person }) {
+function createParties({ sourcesFor, browse, start, art, person }) {
   const parties = new Map(); // code -> party
   const lobby = new Set(); // { res, userId }: pages showing who's hosting
 
@@ -104,8 +109,14 @@ function createParties({ sourcesFor, person }) {
     return m && m.userId === userId ? m : null;
   }
 
+  function stopStream(p) {
+    if (p.stream && p.stream.stop) p.stream.stop();
+    p.stream = null;
+  }
+
   function end(p, by) {
     parties.delete(p.code);
+    stopStream(p);
     for (const m of p.members.values()) {
       for (const res of m.streams) {
         send(res, { type: "ended", by });
@@ -155,6 +166,8 @@ function createParties({ sourcesFor, person }) {
         code, hostId: userId, created: Date.now(), hostLeftAt: null,
         mode: "host", copilots: new Set(),
         media: null, playing: false, position: 0, at: Date.now(),
+        stream: null, // what's playing, server side: { sourceId, itemId, fetch, stop }
+        loads: 0, // so only the latest of overlapping choices wins
         members: new Map(), // memberId -> { userId, streams: Set(res), lastSeen }
         chat: [], // { id, at, name, color, text }
         sent: new Map(), // userId -> recent message/reaction times, for the burst limit
@@ -195,8 +208,8 @@ function createParties({ sourcesFor, person }) {
     },
 
     // { action: "play" | "pause" | "seek" | "load", position, media: { source, id } }
-    // Returns an error message, or null.
-    control(code, memberId, userId, { action, position, media } = {}) {
+    // Resolves to an error message, or null.
+    async control(code, memberId, userId, { action, position, media } = {}) {
       const p = find(code);
       if (!memberOf(p, memberId, userId)) return "You're not in that party.";
       const now = Date.now();
@@ -204,9 +217,26 @@ function createParties({ sourcesFor, person }) {
       if (action === "load") {
         if (!canChoose(p, userId)) return "Only the host can choose what plays.";
         const source = sourcesFor(p.hostId).find((s) => s.id === (media && media.source));
-        const item = source && source.items.find((i) => i.id === media.id);
-        if (!item) return "That isn't available.";
-        Object.assign(p, { media: { source: source.id, ...item }, playing: true, position: 0, at: now });
+        if (!source || typeof media.id !== "string") return "That isn't available.";
+        const load = ++p.loads;
+        let item;
+        try {
+          item = await start(p.hostId, source.id, media.id);
+        } catch (err) {
+          return err.message || "That couldn't be started.";
+        }
+        if (load !== p.loads || parties.get(p.code) !== p) {
+          if (item.stop) item.stop(); // overtaken by another choice, or the party ended
+          return null;
+        }
+        stopStream(p);
+        p.stream = item.fetch ? { sourceId: source.id, itemId: media.id, fetch: item.fetch, stop: item.stop } : null;
+        p.media = {
+          source: source.id, id: media.id, title: item.title, subtitle: item.subtitle || "", kind: item.kind,
+          src: item.fetch ? `/api/party/${p.code}/stream/${load}/${item.playlist}` : item.src,
+          art: item.art ? `/api/party/${p.code}/art/${source.id}/${encodeURIComponent(media.id)}` : null,
+        };
+        Object.assign(p, { playing: true, position: 0, at: now });
         broadcast(p, { kind: "load", by });
         return null;
       }
@@ -284,10 +314,32 @@ function createParties({ sourcesFor, person }) {
       return null;
     },
 
+    // What the host's apps offer, for someone allowed to choose. null: not allowed.
     sourcesOf(code, memberId, userId) {
       const p = find(code);
       if (!memberOf(p, memberId, userId) || !canChoose(p, userId)) return null;
       return sourcesFor(p.hostId);
+    },
+    async browse(code, memberId, userId, sourceId, q) {
+      const p = find(code);
+      if (!memberOf(p, memberId, userId) || !canChoose(p, userId)) return null;
+      if (!sourcesFor(p.hostId).some((s) => s.id === sourceId)) return [];
+      return browse(p.hostId, sourceId, q);
+    },
+
+    // Server side of what's playing, for someone in the party: a stream file
+    // (load: the choice it belongs to, so a stale player can't fetch the next
+    // one's files), or a cover from one of the host's apps.
+    streamFor(code, userId, load) {
+      const p = find(code);
+      const here = p && [...p.members.values()].some((m) => m.userId === userId);
+      return here && p.stream && String(p.loads) === String(load) ? p.stream : null;
+    },
+    artFor(code, userId, sourceId, itemId) {
+      const p = find(code);
+      const here = p && [...p.members.values()].some((m) => m.userId === userId);
+      if (!here || !sourcesFor(p.hostId).some((s) => s.id === sourceId)) return null;
+      return art(p.hostId, sourceId, itemId);
     },
   };
 }

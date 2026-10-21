@@ -9,6 +9,8 @@ const { createAccounts, SESSION_DAYS } = require("./accounts");
 const { createMailer } = require("./mailer");
 const fetcher = require("./fetcher");
 const { createParties } = require("./party");
+const { createApps } = require("./apps");
+const { Readable } = require("node:stream");
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
@@ -1024,28 +1026,66 @@ on("DELETE", "/api/admin/users/:id", "admin", ({ res, params }) => {
 });
 
 // ---------- Watch Party ----------
-// The apps someone can host from. For now only a public test stream, for
-// admins; Plex, Audiobookshelf and the rest join as they're connected.
-// hosts: tile hostnames that count as this app on the home screen.
+// What a host can play: their connected apps (on servers named in the
+// environment, see apps.js) and, for admins, a public test video.
+// hosts: tile hostnames that count as that app on the home screen.
 const TEST_STREAM_ORIGIN = "https://test-streams.mux.dev";
-const TEST_SOURCE = {
-  id: "test",
-  name: "Test video",
-  hosts: [],
-  items: [{ id: "bbb", title: "Big Buck Bunny", kind: "video", src: `${TEST_STREAM_ORIGIN}/x36xhzz/x36xhzz.m3u8` }],
-};
+const TEST_SOURCE = { id: "test", name: "Test video", hosts: [] };
+const TEST_ITEMS = [{ id: "bbb", title: "Big Buck Bunny", subtitle: "Test stream", kind: "video", src: `${TEST_STREAM_ORIGIN}/x36xhzz/x36xhzz.m3u8` }];
+const apps = createApps(process.env);
 const userById = (id) => accounts.allUsers().find((u) => u.id === id) || null;
+const tokenFor = (userId, appId) => userById(userId)?.apps?.[appId]?.token || null;
 const parties = createParties({
-  sourcesFor: (userId) => (userById(userId)?.admin ? [TEST_SOURCE] : []),
+  sourcesFor(userId) {
+    const user = userById(userId);
+    if (!user) return [];
+    const connected = apps.list.filter((a) => user.apps?.[a.id]).map((a) => ({ id: a.id, name: a.name, hosts: [a.host] }));
+    return [...connected, ...(user.admin ? [TEST_SOURCE] : [])];
+  },
+  async browse(userId, sourceId, q) {
+    if (sourceId === TEST_SOURCE.id) return TEST_ITEMS.map(({ src, ...item }) => item);
+    return apps.byId(sourceId).browse(tokenFor(userId, sourceId), q);
+  },
+  async start(userId, sourceId, itemId) {
+    if (sourceId === TEST_SOURCE.id) {
+      const item = TEST_ITEMS.find((i) => i.id === itemId);
+      if (!item) throw new Error("That isn't available.");
+      return item;
+    }
+    return { kind: "audio", art: true, ...(await apps.byId(sourceId).start(tokenFor(userId, sourceId), itemId)) };
+  },
+  art: (userId, sourceId, itemId) => apps.byId(sourceId)?.art(tokenFor(userId, sourceId), itemId) ?? null,
   person: (userId) => {
     const u = userById(userId);
     return u && { name: u.name || u.email, color: u.avatarColor || null };
   },
 });
-const publicSource = ({ id, name, hosts, items }) => ({ id, name, hosts, items: items.map(({ id, title, kind }) => ({ id, title, kind })) });
+
+// Connected apps: each person's own key for the configured servers.
+on("GET", "/api/apps", "user", ({ res, user }) => json(res, 200, apps.list.map((a) => ({
+  id: a.id, name: a.name, host: a.host, connected: !!user.apps?.[a.id], account: user.apps?.[a.id]?.account || null,
+}))));
+on("PUT", "/api/apps/:id", "user", async ({ req, res, params, user }) => {
+  const app = apps.byId(params.id);
+  if (!app) return json(res, 404, { error: "That app isn't set up on this Frunk." });
+  const token = String(((await readBody(req)) || {}).token || "").trim();
+  if (!token || token.length > 4096) return json(res, 400, { error: "Paste your key first." });
+  let account;
+  try {
+    account = await app.account(token);
+  } catch (err) {
+    return json(res, 400, { error: err.status === 401 ? err.message : `Couldn't reach ${app.name}.` });
+  }
+  accounts.setApp(user, app.id, { token, account });
+  return json(res, 200, { connected: true, account });
+});
+on("DELETE", "/api/apps/:id", "user", ({ res, params, user }) => {
+  accounts.setApp(user, params.id, null);
+  return json(res, 200, { ok: true });
+});
 
 on("GET", "/api/party/time", "user", ({ res }) => json(res, 200, { now: Date.now() }));
-on("GET", "/api/party/sources", "user", ({ res, user }) => json(res, 200, parties.sourcesFor(user.id).map(publicSource)));
+on("GET", "/api/party/sources", "user", ({ res, user }) => json(res, 200, parties.sourcesFor(user.id)));
 on("GET", "/api/party/lobby", "user", ({ req, res, user }) => parties.watchLobby(req, res, user.id));
 on("POST", "/api/party", "user", ({ res, user }) => {
   if (!parties.canHost(user.id)) return json(res, 403, { error: "Connect an app that can host a Watch Party first." });
@@ -1062,12 +1102,55 @@ on("GET", "/api/party/:code/events/:member", "user", ({ req, res, params, user }
 on("GET", "/api/party/:code/sources/:member", "user", ({ res, params, user }) => {
   const sources = parties.sourcesOf(params.code, params.member, user.id);
   if (!sources) return json(res, 403, { error: "Only the host can choose what plays." });
-  return json(res, 200, sources.map(publicSource));
+  return json(res, 200, sources);
+});
+on("GET", "/api/party/:code/browse/:member", "user", async ({ res, url, params, user }) => {
+  let items;
+  try {
+    items = await parties.browse(params.code, params.member, user.id, url.searchParams.get("source"), (url.searchParams.get("q") || "").trim().slice(0, 100));
+  } catch (err) {
+    return json(res, 502, { error: err.message });
+  }
+  if (!items) return json(res, 403, { error: "Only the host can choose what plays." });
+  return json(res, 200, items);
+});
+// The playing stream's playlist and segments, fetched from the host's app with
+// the host's key. Playlist entries are rewritten to plain file names, so the
+// player asks for them here too.
+on("GET", "/api/party/:code/stream/:load/:file", "user", async ({ req, res, params, user }) => {
+  const upstream = parties.streamFor(params.code, user.id, params.load);
+  if (!upstream || !/^[\w.-]+$/.test(params.file)) return json(res, 404, { error: "not found" });
+  let r;
+  try {
+    r = await upstream.fetch(params.file);
+  } catch {
+    return json(res, 502, { error: "The app didn't answer." });
+  }
+  if (!r.ok) return json(res, r.status === 404 ? 404 : 502, { error: "not available" });
+  const type = r.headers.get("content-type") || "application/octet-stream";
+  if (/\.m3u8$/.test(params.file)) {
+    const text = (await r.text()).split("\n").map((line) => (line && !line.startsWith("#") ? line.split("?")[0].split("/").pop() : line)).join("\n");
+    res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    return res.end(text);
+  }
+  res.writeHead(200, { "content-type": type, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" });
+  const body = Readable.fromWeb(r.body);
+  req.on("close", () => body.destroy());
+  body.pipe(res);
+});
+on("GET", "/api/party/:code/art/:source/:item", "user", async ({ res, params, user }) => {
+  let r;
+  try {
+    r = await parties.artFor(params.code, user.id, params.source, decodeURIComponent(params.item));
+  } catch {}
+  const type = r && r.ok && r.headers.get("content-type");
+  if (!type || !/^image\/(png|jpeg|webp|gif|avif)/.test(type)) return json(res, 404, { error: "no art" });
+  return sendImage(res, type, Buffer.from(await r.arrayBuffer()), "private, max-age=86400");
 });
 for (const action of ["control", "settings", "chat"]) {
   on("POST", `/api/party/:code/${action}`, "user", async ({ req, res, params, user }) => {
     const body = (await readBody(req)) || {};
-    const error = parties[action](params.code, body.member, user.id, body);
+    const error = await parties[action](params.code, body.member, user.id, body);
     return error ? json(res, 400, { error }) : json(res, 200, { ok: true });
   });
 }

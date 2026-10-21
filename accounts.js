@@ -271,12 +271,20 @@ function createAccounts({ dataDir, ownerEmail }) {
     save();
   }
 
+  // A connected app (Watch Party): { token, account }, or null to disconnect.
+  function setApp(user, id, conn) {
+    user.apps ||= {};
+    if (conn) user.apps[id] = { token: conn.token, account: conn.account };
+    else delete user.apps[id];
+    save();
+  }
+
   const allUsers = () => db.users;
 
   return {
     ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
-    people, deleteUser, setSites, setName, setAvatarColor, allUsers,
+    people, deleteUser, setSites, setName, setAvatarColor, setApp, allUsers,
   };
 }
 
