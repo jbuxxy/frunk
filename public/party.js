@@ -222,6 +222,20 @@
   function render() {
     const { you, state, host: h } = party;
     $("partyTitle").textContent = state.media ? state.media.title : "Watch Party";
+    // Audio: the cover, title and author, where a video would be.
+    const audio = !!state.media && state.media.kind === "audio";
+    $("partyArt").hidden = !audio;
+    view.classList.toggle("audio", audio);
+    if (audio) {
+      $("partyArtTitle").textContent = state.media.title;
+      $("partyArtSub").textContent = state.media.subtitle || "";
+      const img = $("partyArtImg");
+      if (!state.media.art) img.hidden = true;
+      else if (img.getAttribute("src") !== state.media.art) {
+        img.hidden = true; // shown once it loads; a book without a cover just has its title
+        img.src = state.media.art;
+      }
+    }
     $("partyCode").textContent = party.code;
     $("partyPeople").replaceChildren(...party.people.map((p) => {
       const el = dot(p);
@@ -537,38 +551,169 @@
     $("partyReacts").append(b);
   }
 
+  $("partyArtImg").onload = () => ($("partyArtImg").hidden = false);
+  $("partyArtImg").onerror = () => ($("partyArtImg").hidden = true);
+
   // ---------- Choosing what plays ----------
   // only: an app's id, when opened from that app's tile.
+  let pickSources = [];
+  let pickSource = null;
+  let pickSeq = 0;
   async function openPicker(only) {
-    let list;
     try {
-      list = await f.api(`/api/party/${session.code}/sources/${session.member}`);
+      pickSources = await f.api(`/api/party/${session.code}/sources/${session.member}`);
     } catch (err) {
       return f.toast(err.message, 4000);
     }
-    const box = $("partyPickList");
-    box.replaceChildren();
-    for (const source of list.filter((s) => !only || s.id === only)) {
-      const label = document.createElement("div");
-      label.className = "field-label";
-      label.textContent = source.name;
-      box.append(label);
-      for (const item of source.items) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "pill party-row";
-        b.textContent = item.title;
-        b.onclick = () => {
-          $("partyPicker").close();
-          control("load", { media: { source: source.id, id: item.id } });
-        };
-        box.append(b);
-      }
-    }
+    if (!pickSources.length) return f.toast("Nothing to play from yet.");
+    pickSource = pickSources.find((x) => x.id === only) || (pickSource && pickSources.find((x) => x.id === pickSource.id)) || pickSources[0];
+    $("partyPickForm").q.value = "";
+    renderTabs();
     $("partyPicker").showModal();
+    loadPicks();
   }
+  function renderTabs() {
+    $("partyTabs").hidden = pickSources.length < 2;
+    $("partyTabs").replaceChildren(...pickSources.map((x) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `pill small${x === pickSource ? " on" : ""}`;
+      b.textContent = x.name;
+      b.onclick = () => {
+        pickSource = x;
+        $("partyPickForm").q.value = "";
+        renderTabs();
+        loadPicks();
+      };
+      return b;
+    }));
+  }
+  async function loadPicks() {
+    const seq = ++pickSeq;
+    const box = $("partyPickList");
+    const q = $("partyPickForm").q.value.trim();
+    box.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "Loading…" }));
+    let items;
+    try {
+      items = await f.api(`/api/party/${session.code}/browse/${session.member}?${new URLSearchParams({ source: pickSource.id, q })}`);
+    } catch (err) {
+      if (seq === pickSeq) box.replaceChildren(Object.assign(document.createElement("p"), { className: "hint error", textContent: err.message }));
+      return;
+    }
+    if (seq !== pickSeq) return;
+    if (!items.length) {
+      box.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: q ? `Nothing matches “${q}”.` : "Nothing here yet." }));
+      return;
+    }
+    box.replaceChildren(...items.map((item) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "party-item";
+      const art = document.createElement("span");
+      art.className = "party-item-art";
+      art.textContent = (item.title.trim()[0] || "?").toUpperCase();
+      if (item.art) {
+        const img = new Image();
+        img.alt = "";
+        img.loading = "lazy";
+        img.onload = () => art.replaceChildren(img);
+        img.src = `/api/party/${session.code}/art/${pickSource.id}/${encodeURIComponent(item.id)}`;
+      }
+      const text = document.createElement("span");
+      text.className = "party-item-text";
+      const title = document.createElement("b");
+      title.textContent = item.title;
+      const sub = document.createElement("small");
+      sub.textContent = item.subtitle || "";
+      text.append(title, sub);
+      b.append(art, text);
+      b.onclick = () => {
+        $("partyPicker").close();
+        f.toast(`Starting ${item.title}…`);
+        control("load", { media: { source: pickSource.id, id: item.id } });
+      };
+      return b;
+    }));
+  }
+  let searchTimer = null;
+  $("partyPickForm").q.oninput = () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(loadPicks, 350);
+  };
+  $("partyPickForm").onsubmit = (e) => {
+    e.preventDefault();
+    clearTimeout(searchTimer);
+    loadPicks();
+  };
   $("partyChoose").onclick = () => openPicker();
   $("partyEmptyChoose").onclick = () => openPicker();
+
+  // ---------- Connected apps ----------
+  // Your own key for each app the admin set up; hosting from it needs one.
+  let appList = [];
+  async function loadApps() {
+    appList = await f.api("/api/apps").catch(() => []);
+    $("appsBtn").hidden = !appList.length;
+  }
+  const APP_HELP = {
+    abs: "In Audiobookshelf, open Settings → API Keys, add a key, and paste it here.",
+  };
+  function renderApps() {
+    $("appsList").replaceChildren(...appList.map((app) => {
+      const box = document.createElement("div");
+      box.className = "app-row";
+      const name = document.createElement("div");
+      name.className = "app-name";
+      name.textContent = app.name;
+      const note = document.createElement("p");
+      note.className = "hint";
+      box.append(name, note);
+      if (app.connected) {
+        note.textContent = `Connected as ${app.account} on ${app.host}.`;
+        const off = document.createElement("button");
+        off.type = "button";
+        off.className = "pill small danger";
+        off.textContent = "Disconnect";
+        off.onclick = () => f.pressed(off, async () => {
+          await f.api(`/api/apps/${app.id}`, { method: "DELETE" });
+          await appsChanged();
+        });
+        box.append(off);
+      } else {
+        note.textContent = APP_HELP[app.id] || "Paste your key from the app.";
+        const row = document.createElement("div");
+        row.className = "invite-row";
+        const input = document.createElement("input");
+        input.type = "password";
+        input.placeholder = "API key";
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        const go = document.createElement("button");
+        go.type = "button";
+        go.className = "pill accent";
+        go.textContent = "Connect";
+        go.onclick = () => f.pressed(go, async () => {
+          await f.api(`/api/apps/${app.id}`, { method: "PUT", body: JSON.stringify({ token: input.value }) });
+          f.toast(`${app.name} connected`);
+          await appsChanged();
+        });
+        row.append(input, go);
+        box.append(row);
+      }
+      return box;
+    }));
+  }
+  async function appsChanged() {
+    await loadApps();
+    sources = await f.api("/api/party/sources").catch(() => sources);
+    renderApps();
+    renderBar();
+  }
+  $("appsBtn").onclick = async () => {
+    $("accountDialog").close();
+    renderApps();
+    $("appsDialog").showModal();
+  };
 
   // ---------- Who can control (host) ----------
   function renderSettings() {
@@ -682,6 +827,7 @@
         return;
       }
       sources = await f.api("/api/party/sources").catch(() => []);
+      loadApps();
       watchLobby();
       renderBar();
       const code = f.params.get("party") || store.get("frunk-party-pending");

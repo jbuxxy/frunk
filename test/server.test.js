@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
-const { fakeCdn, startServer, signUp, serverWithPeople } = require("./helpers");
+const { fakeCdn, fakeAbs, ABS_KEY, startServer, signUp, serverWithPeople } = require("./helpers");
 
 test("who can call what", async (t) => {
   const cdn = await fakeCdn();
@@ -332,9 +332,7 @@ test("watch party: hosting, joining, who controls what", async (t) => {
   // Only someone with an app that can host may (for now, admins: the test stream).
   assert.equal((await srv.request("GET", "/api/party/sources", { cookie: member })).body.length, 0);
   assert.equal((await post("/api/party", member)).status, 403);
-  const [source] = (await srv.request("GET", "/api/party/sources", { cookie: admin })).body;
-  assert.equal(source.id, "test");
-  assert.equal(source.items[0].src, undefined); // addresses only reach party members
+  assert.deepEqual((await srv.request("GET", "/api/party/sources", { cookie: admin })).body, [{ id: "test", name: "Test video", hosts: [] }]);
 
   const lobby = await events(srv, "/api/party/lobby", member);
   assert.deepEqual((await lobby.next()).parties, []);
@@ -428,4 +426,70 @@ test("watch party chat: messages, history for newcomers, reactions", async (t) =
   assert.equal((await say(member, guest.member, { reaction: "🔥" })).status, 400);
   assert.equal((await say(member, guest.member, { text: "still fine" })).status, 200);
   await Promise.all([hostEvents.close(), guestEvents.close()]);
+});
+
+test("watch party from Audiobookshelf: connect, browse, stream through Frunk", async (t) => {
+  const abs = await fakeAbs();
+  const { srv, admin, member } = await serverWithPeople({ env: { ABS_URL: abs.base } });
+  t.after(() => Promise.all([srv.stop(), abs.close()]));
+  const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
+
+  // Connecting: only a key Audiobookshelf accepts, and the key never comes back.
+  assert.deepEqual((await srv.request("GET", "/api/apps", { cookie: member })).body, [{ id: "abs", name: "Audiobookshelf", host: "127.0.0.1", connected: false, account: null }]);
+  assert.equal((await post("/api/party", member)).status, 403);
+  const bad = await srv.request("PUT", "/api/apps/abs", { cookie: member, body: { token: "wrong" } });
+  assert.deepEqual([bad.status, bad.body.error], [400, "Audiobookshelf didn't accept that key."]);
+  assert.equal((await srv.request("PUT", "/api/apps/nope", { cookie: member, body: { token: ABS_KEY } })).status, 404);
+  assert.deepEqual((await srv.request("PUT", "/api/apps/abs", { cookie: member, body: { token: ABS_KEY } })).body, { connected: true, account: "jordan" });
+  const listed = await srv.request("GET", "/api/apps", { cookie: member });
+  assert.equal(listed.body[0].account, "jordan");
+  assert.doesNotMatch(JSON.stringify(listed.body), new RegExp(ABS_KEY));
+  assert.deepEqual((await srv.request("GET", "/api/party/sources", { cookie: member })).body, [{ id: "abs", name: "Audiobookshelf", hosts: ["127.0.0.1"] }]);
+
+  // The member hosts; the admin joins as a guest.
+  const { code } = (await post("/api/party", member)).body;
+  const host = (await post(`/api/party/${code}/join`, member)).body;
+  const guest = (await post(`/api/party/${code}/join`, admin)).body;
+  const browse = (cookie, m, query) => srv.request("GET", `/api/party/${code}/browse/${m}?${new URLSearchParams(query)}`, { cookie });
+  assert.deepEqual((await browse(member, host.member, { source: "abs" })).body, [{ id: "li_1", title: "Project Hail Mary", subtitle: "Andy Weir", kind: "audio", art: true }]);
+  assert.equal((await browse(member, host.member, { source: "abs", q: "hail" })).body[0].subtitle, "Andy Weir");
+  assert.deepEqual((await browse(member, host.member, { source: "abs", q: "dune" })).body, []);
+  assert.equal((await browse(admin, guest.member, { source: "abs" })).status, 403);
+  // The admin's own test video isn't the host's to play.
+  assert.deepEqual((await browse(member, host.member, { source: "test" })).body, []);
+
+  const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, admin);
+  assert.equal((await post(`/api/party/${code}/control`, member, { member: host.member, action: "load", media: { source: "abs", id: "li_1" } })).status, 200);
+  let msg;
+  do msg = await guestEvents.nextOf("party"); while (!msg.party.state.media);
+  const media = msg.party.state.media;
+  assert.deepEqual([media.title, media.subtitle, media.kind], ["Project Hail Mary", "Andy Weir", "audio"]);
+  assert.equal(media.src, `/api/party/${code}/stream/1/output.m3u8`);
+
+  // Any member streams it through Frunk, with the host's key; others can't.
+  const playlist = await srv.request("GET", media.src, { cookie: admin });
+  assert.equal(playlist.status, 200);
+  assert.match(playlist.body, /^output-0\.ts$/m, "segment paths point back at Frunk");
+  const segment = await fetch(`${srv.base}/api/party/${code}/stream/1/output-0.ts`, { headers: { cookie: admin } });
+  assert.equal(await segment.text(), "segment-bytes");
+  assert.equal((await srv.request("GET", media.src)).status, 401);
+  assert.equal((await srv.request("GET", `/api/party/${code}/stream/2/output.m3u8`, { cookie: admin })).status, 404);
+  assert.equal((await srv.request("GET", `/api/party/${code}/stream/1/..%2fsecret`, { cookie: admin })).status, 404);
+  const art = await srv.request("GET", media.art, { cookie: admin });
+  assert.equal(art.headers.get("content-type"), "image/png");
+  assert.match(art.headers.get("content-security-policy"), /sandbox/);
+
+  // A new choice ends the old Audiobookshelf session; so does ending the party.
+  await post(`/api/party/${code}/control`, member, { member: host.member, action: "load", media: { source: "abs", id: "li_1" } });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(abs.closed, ["sess1"]);
+  assert.equal((await srv.request("GET", media.src, { cookie: admin })).status, 404, "the old stream is gone");
+  await post(`/api/party/${code}/end`, member);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(abs.closed, ["sess1", "sess2"]);
+  await guestEvents.close();
+
+  // Disconnecting takes away hosting from it.
+  await srv.request("DELETE", "/api/apps/abs", { cookie: member });
+  assert.deepEqual((await srv.request("GET", "/api/party/sources", { cookie: member })).body, []);
 });

@@ -51,6 +51,45 @@ async function fakeCdn() {
   return cdn;
 }
 
+// A small Audiobookshelf: one book library with one book, its HLS stream,
+// and a cover. Only Bearer KEY gets in. closed lists sessions that ended.
+const ABS_KEY = "abs-test-key";
+async function fakeAbs() {
+  const abs = { hits: {}, closed: [] };
+  const book = { id: "li_1", media: { metadata: { title: "Project Hail Mary", authorName: "Andy Weir" } } };
+  const server = http.createServer((req, res) => {
+    const { pathname, searchParams } = new URL(req.url, "http://x");
+    abs.hits[pathname] = (abs.hits[pathname] || 0) + 1;
+    const send = (type, body) => res.writeHead(200, { "content-type": type }).end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body));
+    if (req.headers.authorization !== `Bearer ${ABS_KEY}`) return res.writeHead(401).end("Unauthorized");
+    if (pathname === "/api/me") return send("application/json", { id: "u1", username: "jordan" });
+    if (pathname === "/api/libraries") return send("application/json", { libraries: [{ id: "lib1", name: "Books", mediaType: "book" }, { id: "pod", name: "Podcasts", mediaType: "podcast" }] });
+    if (pathname === "/api/libraries/lib1/items") return send("application/json", { results: [book], total: 1 });
+    if (pathname === "/api/libraries/lib1/search") {
+      const hit = /hail/i.test(searchParams.get("q"));
+      return send("application/json", { book: hit ? [{ libraryItem: { id: "li_1", media: { metadata: { title: "Project Hail Mary", authors: [{ name: "Andy Weir" }] } } } }] : [] });
+    }
+    if (pathname === "/api/items/li_1/play" && req.method === "POST") {
+      const id = `sess${(abs.hits[pathname])}`;
+      return send("application/json", { id, displayTitle: "Project Hail Mary", displayAuthor: "Andy Weir", audioTracks: [{ contentUrl: `/hls/${id}/output.m3u8` }] });
+    }
+    let m;
+    if ((m = /^\/hls\/(sess\d+)\/output\.m3u8$/.exec(pathname))) return send("application/vnd.apple.mpegurl", `#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n/hls/${m[1]}/output-0.ts\n#EXT-X-ENDLIST\n`);
+    if (/^\/hls\/sess\d+\/output-0\.ts$/.test(pathname)) return send("video/mp2t", Buffer.from("segment-bytes"));
+    if (pathname === "/api/items/li_1/cover") return send("image/png", png());
+    if ((m = /^\/api\/session\/(sess\d+)\/close$/.exec(pathname))) {
+      abs.closed.push(m[1]);
+      return send("application/json", {});
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.unref();
+  abs.base = `http://127.0.0.1:${server.address().port}`;
+  abs.close = () => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+  return abs;
+}
+
 // Starts server.js. seedIndexes writes fresh copies of both logo indexes into
 // DATA_DIR so startup doesn't download them (pass false to test the download).
 async function startServer({ cdn, env = {}, seedIndexes = true, owner = OWNER } = {}) {
@@ -145,4 +184,4 @@ async function serverWithPeople(opts) {
   return { srv, admin, member };
 }
 
-module.exports = { OWNER, fakeCdn, startServer, request, signUp, serverWithPeople, png };
+module.exports = { OWNER, ABS_KEY, fakeAbs, fakeCdn, startServer, request, signUp, serverWithPeople, png };

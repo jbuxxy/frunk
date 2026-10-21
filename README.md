@@ -52,9 +52,9 @@ the browser into fullscreen with one tap.
 - **Watch Party.** Watch together from different cars (or phones): one person
   hosts, everyone else sees a **Join** button, and playback stays in step on
   every screen, with a chat, emoji and one-tap reactions that float over the
-  video. The host picks who else may play, pause and skip. For now it
-  plays a test video, for admins; Plex, Audiobookshelf and other apps that can
-  stream into it come next.
+  video. The host picks who else may play, pause and skip. Hosts play from
+  their own Audiobookshelf account (connected under **Connected apps** in the
+  account menu); guests need nothing but Frunk. Admins also get a test video.
 - **No dependencies.** A single Node.js server with no npm packages, and a
   vanilla JS front end.
 
@@ -85,6 +85,7 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `TRUSTED_PROXIES` | Reverse-proxy IPs or CIDRs (comma-separated) whose `X-Real-IP` / `X-Forwarded-*` headers are trusted. Default `127.0.0.1,::1`. Without it, the login lockout sees only your proxy's address. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional Google sign-in. See [Google sign-in](docs/google-sign-in.md). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
+| `ABS_URL` | Your Audiobookshelf server, e.g. `https://abs.example.com`, for the Watch Party. People connect their own account to it with an API key; Frunk only ever talks to this address. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
 
@@ -117,6 +118,7 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `server.js` | HTTP server: static files, JSON API, Google sign-in, phone pairing, icon and logo lookup |
 | `accounts.js` | Users, invites and sessions, stored in `DATA_DIR/accounts.json` |
 | `party.js` | Watch Party rooms: members, what's playing and where, who may control it (in memory) |
+| `apps.js` | Apps a Watch Party plays from (Audiobookshelf), on the servers named in the environment |
 | `fetcher.js` | Outbound fetches for user-supplied URLs, with private-network blocking |
 | `mailer.js` | Minimal SMTP client for invite emails |
 | `public/` | The launcher page (`index.html`, `app.js`, `style.css`) |
@@ -150,6 +152,13 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 **Fetching from your network**
 - Only admins' tiles (and the default page) may fetch icons from private or local
   addresses. Other users can't use Frunk to reach the server's network.
+
+**Watch Party**
+- Connected apps only talk to the servers named in the environment, so a key
+  can't be used to make Frunk fetch from anywhere else. Keys are kept with the
+  account on the server and never sent back to a browser.
+- Guests stream what the host plays through Frunk, and only while they're in
+  that party; each new choice gets new addresses.
 
 **Admin powers**
 - The admin can reset any member's password, because a reset is an invite link
