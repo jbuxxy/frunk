@@ -1,0 +1,68 @@
+/* Watch Party car test (/party/test). Builds on style.css. */
+a.brand { color: inherit; text-decoration: none; }
+.bar .clock { font-size: 22px; }
+
+.tests {
+  display: grid; gap: 20px;
+  max-width: 1100px; margin: 0 auto;
+  padding: 16px clamp(16px, 4vw, 56px) 56px;
+  user-select: text;
+}
+.intro { margin: 0; font-size: 20px; color: var(--muted); }
+.intro.warn { color: var(--text); }
+.intro a { color: var(--accent); }
+
+.test { background: var(--tile); border-radius: var(--radius); padding: 24px 28px; }
+.test p { margin: 10px 0 0; font-size: 19px; line-height: 1.45; }
+.test-head { display: flex; align-items: center; gap: 16px; }
+.test-head h2 { margin: 0; flex: 1; font-family: var(--display); font-size: 30px; letter-spacing: .04em; }
+.num {
+  width: 44px; height: 44px; border-radius: 50%; flex: none;
+  display: grid; place-items: center;
+  background: var(--raised); font-family: var(--display); font-size: 24px;
+}
+
+.status { font-size: 17px; font-weight: 600; padding: 8px 16px; border-radius: 999px; background: var(--raised); color: var(--muted); }
+.status::before { content: "Not run"; }
+.status[data-state=running] { color: var(--text); }
+.status[data-state=running]::before { content: "Running…"; }
+.status[data-state=pass] { background: rgba(52, 199, 89, .16); color: var(--green); }
+.status[data-state=pass]::before { content: "Pass"; }
+.status[data-state=fail] { background: rgba(232, 33, 39, .16); color: var(--red); }
+.status[data-state=fail]::before { content: "Fail"; }
+
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 18px; }
+.row .pill { background: var(--raised); }
+.row .pill.accent { background: var(--accent); }
+.verdict .pill.chosen { box-shadow: var(--ring); }
+.or { color: var(--muted); font-size: 18px; }
+.detail { color: var(--muted); font-size: 17px !important; font-variant-numeric: tabular-nums; }
+.detail:empty { display: none; }
+.detail.live { white-space: pre-line; }
+
+.meter { flex: 1; min-width: 160px; height: 14px; border-radius: 7px; background: var(--raised); overflow: hidden; }
+.meter div { height: 100%; width: 0; background: var(--green); transition: width .08s linear; }
+
+input.code {
+  width: 170px; min-height: 56px; padding: 0 16px;
+  border: 2px solid var(--line); border-radius: 16px;
+  background: var(--bg); color: var(--text);
+  font-family: var(--display); font-weight: 700; font-size: 30px; letter-spacing: .25em;
+  text-align: center; text-transform: uppercase;
+}
+input.code:focus { outline: none; border-color: var(--accent); }
+.room-code { font-family: var(--display); font-weight: 700; font-size: 44px; letter-spacing: .25em; }
+
+.people { flex: 1; display: flex; flex-wrap: wrap; gap: 14px; }
+.person { display: flex; align-items: center; gap: 10px; padding: 6px 16px 6px 6px; border-radius: 999px; background: var(--raised); font-size: 18px; font-weight: 600; }
+.person .dot {
+  width: 40px; height: 40px; border-radius: 50%; flex: none;
+  display: grid; place-items: center; color: #fff; font-size: 18px;
+  transition: box-shadow .1s;
+}
+.person.speaking .dot { box-shadow: 0 0 0 3px var(--raised), 0 0 0 6px var(--green); }
+
+video { display: block; width: 100%; max-height: 50vh; margin-top: 18px; border-radius: 16px; background: #000; }
+
+.send { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; }
+.send .detail { margin: 0; }

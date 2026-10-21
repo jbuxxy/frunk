@@ -81,6 +81,7 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
+| `FRUNK_TURN_URLS`, `FRUNK_TURN_USERNAME`, `FRUNK_TURN_CREDENTIAL` | Optional TURN relay for the Watch Party car test's voice call, e.g. `turn:turn.example.com:3478`. Cars on LTE usually can't reach each other directly. |
 
 ## Development
 
@@ -104,6 +105,17 @@ push and pull request.
 To preview the car-only UI on a desktop, override the browser's user agent with
 one containing `Tesla` (Chrome DevTools → Network conditions).
 
+### Watch Party car test
+
+`/party/test` checks whether a car can run a Watch Party: the microphone, a
+voice call with a second car or phone, HLS video playback, the rear screen while
+driving, echo, and voice while another tab is open. Open it on both devices,
+signed in, and run the tests; **Send results** writes them to the server log
+(`docker compose logs frunk | grep "Car test"`). The call's audio goes device
+to device, using Google's public STUN server to find a route, or the TURN relay
+when `FRUNK_TURN_URLS` is set. The test video is a public sample stream from
+`test-streams.mux.dev`.
+
 ### Layout
 
 | File | What it does |
@@ -114,6 +126,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `mailer.js` | Minimal SMTP client for invite emails |
 | `public/` | The launcher page (`index.html`, `app.js`, `style.css`) |
 | `public/vendor/qrcode.min.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT |
+| `public/party-test.*` | The Watch Party car test page (`/party/test`) |
+| `public/vendor/hls.min.js` | [hls.js](https://github.com/video-dev/hls.js) 1.5.17, Apache-2.0 |
 | `public/fonts/` | Inter and Rajdhani (Latin subset), SIL Open Font License |
 | `test/` | Unit, API and browser tests |
 

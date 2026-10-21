@@ -760,7 +760,7 @@ function findSite(id, user) {
   return null;
 }
 
-function serveStatic(req, res, pathname) {
+function serveStatic(req, res, pathname, headers = SECURITY_HEADERS) {
   const file = path.normalize(path.join(PUBLIC_DIR, pathname === "/" ? "index.html" : pathname));
   if (!file.startsWith(PUBLIC_DIR)) return json(res, 404, { error: "not found" });
   fs.readFile(file, (err, buf) => {
@@ -768,7 +768,7 @@ function serveStatic(req, res, pathname) {
     const ext = path.extname(file);
     if (ext === ".html") buf = Buffer.from(buf.toString().replaceAll("__V__", ASSET_VERSION));
     res.writeHead(200, {
-      ...SECURITY_HEADERS,
+      ...headers,
       "content-type": MIME[ext] || "application/octet-stream",
       "cache-control": ext === ".html" ? "no-cache" : "public, max-age=300",
     });
@@ -1021,6 +1021,109 @@ on("DELETE", "/api/admin/users/:id", "admin", ({ res, params }) => {
   return json(res, 200, { ok: true });
 });
 
+// ---------- Watch Party car test (/party/test) ----------
+// Two devices meet in a short-lived room to check, in a real car, what a Watch
+// Party needs: the mic, a voice call, video playback. The server only relays
+// the WebRTC handshake between them, over server-sent events; the audio itself
+// goes device to device (or through TURN, when FRUNK_TURN_URLS is set).
+const TEST_ROOM_MS = 2 * 60 * 60_000;
+const TEST_PEER_GONE_MS = 60_000; // a page hidden in a background tab may drop its stream for a while
+const TEST_STREAM = "https://test-streams.mux.dev";
+const testRooms = new Map(); // code -> { created, peers: Map(peerId -> { userId, name, color, stream, queue, lastSeen }) }
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  ...(process.env.FRUNK_TURN_URLS ? [{
+    urls: process.env.FRUNK_TURN_URLS.split(",").map((x) => x.trim()).filter(Boolean),
+    username: process.env.FRUNK_TURN_USERNAME || "",
+    credential: process.env.FRUNK_TURN_CREDENTIAL || "",
+  }] : []),
+];
+// The test page plays a public sample stream, through hls.js when the browser
+// can't play HLS itself (MediaSource buffers are blob: URLs).
+const PARTY_TEST_HEADERS = {
+  ...SECURITY_HEADERS,
+  "content-security-policy": SECURITY_HEADERS["content-security-policy"]
+    .replace("connect-src 'self'", `connect-src 'self' ${TEST_STREAM}`) + `; media-src 'self' blob: ${TEST_STREAM}`,
+};
+
+function testSend(peer, msg) {
+  if (peer.stream) peer.stream.write(`data: ${JSON.stringify(msg)}\n\n`);
+  else peer.queue.push(msg);
+}
+function testBroadcast(room, fromId, msg) {
+  for (const [id, peer] of room.peers) if (id !== fromId) testSend(peer, msg);
+}
+function testPeer(code, peerId, user) {
+  const room = testRooms.get(String(code).toUpperCase());
+  const peer = room && room.peers.get(peerId);
+  return peer && peer.userId === user.id ? { room, peer } : null;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of testRooms) {
+    for (const [id, peer] of room.peers) {
+      if (!peer.stream && now - peer.lastSeen > TEST_PEER_GONE_MS) {
+        room.peers.delete(id);
+        testBroadcast(room, id, { type: "peer-left", id });
+      }
+    }
+    if (now - room.created > TEST_ROOM_MS || !room.peers.size) testRooms.delete(code);
+  }
+}, 15_000).unref();
+
+// No code: start a new room. With a code: join it (two devices per room).
+on("POST", "/api/party-test/join", "user", async ({ req, res, user }) => {
+  let code = String(((await readBody(req)) || {}).code || "").trim().toUpperCase();
+  if (!code) {
+    do code = newPairCode().slice(0, 4); while (testRooms.has(code));
+    testRooms.set(code, { created: Date.now(), peers: new Map() });
+  }
+  const room = testRooms.get(code);
+  if (!room) return json(res, 404, { error: "No test call with that code." });
+  if (room.peers.size >= 2) return json(res, 409, { error: "That test call already has two devices." });
+  const id = crypto.randomBytes(12).toString("base64url");
+  const me = { id, name: user.name || user.email, color: user.avatarColor || null };
+  const peers = [...room.peers].map(([pid, p]) => ({ id: pid, name: p.name, color: p.color }));
+  room.peers.set(id, { userId: user.id, name: me.name, color: me.color, stream: null, queue: [], lastSeen: Date.now() });
+  testBroadcast(room, id, { type: "peer-joined", peer: me });
+  return json(res, 200, { code, id, peers, iceServers: ICE_SERVERS });
+});
+on("GET", "/api/party-test/events/:code/:peer", "user", ({ req, res, params, user }) => {
+  const found = testPeer(params.code, params.peer, user);
+  if (!found) return json(res, 404, { error: "That test call has ended." });
+  const { peer } = found;
+  if (peer.stream) peer.stream.end();
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    "x-accel-buffering": "no", // nginx would otherwise hold events back
+  });
+  res.write(": open\n\n");
+  peer.stream = res;
+  for (const msg of peer.queue.splice(0)) testSend(peer, msg);
+  const ping = setInterval(() => res.write(": ping\n\n"), 20_000);
+  req.on("close", () => {
+    clearInterval(ping);
+    if (peer.stream === res) peer.stream = null;
+    peer.lastSeen = Date.now();
+  });
+});
+on("POST", "/api/party-test/signal", "user", async ({ req, res, user }) => {
+  const { code, from, to, data } = (await readBody(req)) || {};
+  const found = testPeer(code, from, user);
+  const target = found && found.room.peers.get(to);
+  if (!target) return json(res, 404, { error: "The other device has left." });
+  testSend(target, { type: "signal", from, data });
+  return json(res, 200, { ok: true });
+});
+// Results end up in the server log, so they can be read back after a drive.
+on("POST", "/api/party-test/report", "user", async ({ req, res, user }) => {
+  const report = JSON.stringify((await readBody(req)) || {});
+  if (report.length > 8192) return json(res, 400, { error: "Report too large." });
+  console.log(`Car test results from ${user.email}: ${report}`);
+  return json(res, 200, { ok: true });
+});
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://x");
@@ -1048,6 +1151,7 @@ const server = http.createServer(async (req, res) => {
     let file;
     try { file = decodeURIComponent(pathname); } catch { return json(res, 404, { error: "not found" }); }
     if (file === "/pair") file = "/"; // short address for typing a car's code on a phone
+    if (file === "/party/test") return serveStatic(req, res, "/party-test.html", PARTY_TEST_HEADERS);
     serveStatic(req, res, file);
   } catch (err) {
     console.error(err);

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frunk · Car test</title>
+  <meta name="theme-color" content="#0f1114">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css?v=__V__">
+  <link rel="stylesheet" href="/party-test.css?v=__V__">
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="/">
+      <img src="/icon.svg" alt="" width="40" height="40">
+      <span>Frunk</span>
+    </a>
+    <div class="clock">Watch Party car test</div>
+    <div class="actions">
+      <button class="pill fs-btn" id="fsBtn" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+        Fullscreen
+      </button>
+    </div>
+  </header>
+
+  <main class="tests">
+    <p class="intro" id="intro">Checks whether this car can run a Watch Party. Do tests 1–3 parked, then 4–6 with a second car or a phone on the call.</p>
+    <p class="intro warn" id="signedOut" hidden>Sign in to Frunk first, then come back to this page. <a href="/">Open Frunk</a></p>
+
+    <section class="test" id="t-mic">
+      <div class="test-head"><span class="num">1</span><h2>Microphone</h2><span class="status" data-status></span></div>
+      <p>Tap Allow, accept the car's prompt, then say something.</p>
+      <div class="row">
+        <button class="pill accent" id="micBtn">Allow microphone</button>
+        <div class="meter"><div id="micLevel"></div></div>
+      </div>
+      <p class="detail" id="micDetail"></p>
+    </section>
+
+    <section class="test" id="t-call">
+      <div class="test-head"><span class="num">2</span><h2>Voice call</h2><span class="status" data-status></span></div>
+      <p>Start a call here and enter the code on the other car or phone (open <b id="testHost"></b> there). Passes once you hear each other.</p>
+      <div class="row" id="callSetup">
+        <button class="pill accent" id="startBtn">Start test call</button>
+        <span class="or">or</span>
+        <input class="code" id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false">
+        <button class="pill" id="joinBtn">Join</button>
+      </div>
+      <div class="row" id="callLive" hidden>
+        <span class="room-code" id="roomCode"></span>
+        <div class="people" id="people"></div>
+      </div>
+      <p class="detail" id="callDetail"></p>
+    </section>
+
+    <section class="test" id="t-video">
+      <div class="test-head"><span class="num">3</span><h2>Video</h2><span class="status" data-status></span></div>
+      <p>Plays a sample stream (the same format Plex sends). Passes after 20 seconds of smooth playback.</p>
+      <div class="row">
+        <button class="pill accent" id="videoBtn">Play test video</button>
+      </div>
+      <video id="video" playsinline controls hidden></video>
+      <p class="detail" id="videoDetail"></p>
+    </section>
+
+    <section class="test" id="t-drive">
+      <div class="test-head"><span class="num">4</span><h2>Rear screen while driving</h2><span class="status" data-status></span></div>
+      <p>With the call and video running: on the rear screen tap <b>Join Front Display</b>, then shift into Drive and go for a short drive. Does the video keep playing and can the rear seat still hear and be heard?</p>
+      <p class="detail live" id="driveDetail"></p>
+      <div class="row verdict" data-verdict="t-drive">
+        <button class="pill" data-pass>It kept working</button>
+        <button class="pill danger" data-fail>It stopped</button>
+      </div>
+    </section>
+
+    <section class="test" id="t-echo">
+      <div class="test-head"><span class="num">5</span><h2>Echo</h2><span class="status" data-status></span></div>
+      <p>With the video playing out loud and the call on, stay quiet and ask the other person: <b>can they hear the movie through the call?</b></p>
+      <div class="row verdict" data-verdict="t-echo">
+        <button class="pill" data-pass>No, it's clean</button>
+        <button class="pill danger" data-fail>Yes, they hear it</button>
+      </div>
+    </section>
+
+    <section class="test" id="t-tab">
+      <div class="test-head"><span class="num">6</span><h2>Voice from another tab</h2><span class="status" data-status></span></div>
+      <p>With the call on, open Disney+ in a new tab and keep talking for a minute, then come back to this tab. Could you still hear each other?</p>
+      <div class="row">
+        <button class="pill accent" id="tabBtn">Open Disney+ in a new tab</button>
+      </div>
+      <p class="detail" id="tabDetail"></p>
+      <div class="row verdict" data-verdict="t-tab">
+        <button class="pill" data-pass>Yes, we could talk</button>
+        <button class="pill danger" data-fail>No, it cut out</button>
+      </div>
+    </section>
+
+    <section class="send">
+      <button class="pill accent" id="sendBtn">Send results</button>
+      <p class="detail" id="sendDetail">Results go to the Frunk server log, so you can read them back later.</p>
+    </section>
+  </main>
+
+  <script src="/vendor/hls.min.js?v=__V__"></script>
+  <script src="/party-test.js?v=__V__"></script>
+</body>
+</html>

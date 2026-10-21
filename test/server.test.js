@@ -26,6 +26,9 @@ test("who can call what", async (t) => {
     ["POST", "/api/admin/invites", { email: "bad" }, 401, 403, 400],
     ["POST", `/api/admin/invites/${invite.body.token}/resend`, {}, 401, 403, 502], // no SMTP set up
     ["DELETE", "/api/admin/users/nobody", undefined, 401, 403, 400],
+    ["POST", "/api/party-test/join", { code: "ZZZZ" }, 401, 404, 404],
+    ["GET", "/api/party-test/events/ZZZZ/nobody", undefined, 401, 404, 404],
+    ["POST", "/api/party-test/signal", { code: "ZZZZ" }, 401, 404, 404],
     ["GET", "/api/no-such-route", undefined, 404, 404, 404],
   ];
   for (const [method, path, body, ...want] of cases) {
@@ -295,4 +298,55 @@ test("static files and headers", async (t) => {
     assert.equal((await srv.request("GET", sneaky)).status, 404, sneaky);
   }
   assert.equal((await srv.request("POST", "/index.html", { body: {} })).status, 405);
+});
+
+test("party car test: two devices meet and pass handshake messages", async (t) => {
+  const { srv, admin, member } = await serverWithPeople();
+  t.after(() => srv.stop());
+  const host = await srv.request("POST", "/api/party-test/join", { cookie: admin, body: {} });
+  assert.equal(host.status, 200);
+  assert.match(host.body.code, /^[A-Z2-9]{4}$/);
+  assert.deepEqual(host.body.peers, []);
+  assert.ok(host.body.iceServers.length >= 1);
+
+  // The host listens for events before the guest arrives.
+  const events = await fetch(`${srv.base}/api/party-test/events/${host.body.code}/${host.body.id}`, { headers: { cookie: admin } });
+  assert.equal(events.headers.get("content-type"), "text/event-stream");
+  const reader = events.body.getReader();
+  let text = "";
+  const nextEvent = async () => {
+    for (;;) {
+      const m = /data: (.*)\n\n/.exec(text);
+      if (m) { text = text.slice(m.index + m[0].length); return JSON.parse(m[1]); }
+      text += new TextDecoder().decode((await reader.read()).value);
+    }
+  };
+
+  // Lower case works; someone else can't read the host's events.
+  const guest = await srv.request("POST", "/api/party-test/join", { cookie: member, body: { code: host.body.code.toLowerCase() } });
+  assert.equal(guest.status, 200);
+  assert.deepEqual(guest.body.peers.map((p) => p.name), ["owner"]);
+  assert.equal((await srv.request("GET", `/api/party-test/events/${host.body.code}/${host.body.id}`, { cookie: member })).status, 404);
+  assert.deepEqual(await nextEvent(), { type: "peer-joined", peer: { id: guest.body.id, name: "Member", color: null } });
+
+  const offer = { sdp: { type: "offer", sdp: "v=0" } };
+  const sent = await srv.request("POST", "/api/party-test/signal", { cookie: member, body: { code: host.body.code, from: guest.body.id, to: host.body.id, data: offer } });
+  assert.equal(sent.status, 200);
+  assert.deepEqual(await nextEvent(), { type: "signal", from: guest.body.id, data: offer });
+  // Only as the guest's own account.
+  assert.equal((await srv.request("POST", "/api/party-test/signal", { cookie: admin, body: { code: host.body.code, from: guest.body.id, to: host.body.id, data: offer } })).status, 404);
+
+  assert.equal((await srv.request("POST", "/api/party-test/join", { cookie: admin, body: { code: host.body.code } })).status, 409);
+  await reader.cancel();
+
+  const report = await srv.request("POST", "/api/party-test/report", { cookie: member, body: { results: { "t-mic": { state: "pass" } } } });
+  assert.equal(report.status, 200);
+  assert.match(srv.log, /Car test results from member@example\.com: .*"t-mic"/);
+  assert.equal((await srv.request("POST", "/api/party-test/report", { cookie: member, body: { x: "a".repeat(9000) } })).status, 400);
+
+  const page = await srv.request("GET", "/party/test");
+  assert.equal(page.status, 200);
+  assert.match(page.body, /party-test\.js\?v=\w+/);
+  assert.match(page.headers.get("content-security-policy"), /media-src 'self' blob: https:\/\/test-streams\.mux\.dev/);
+  assert.doesNotMatch((await srv.request("GET", "/")).headers.get("content-security-policy"), /mux/);
 });
