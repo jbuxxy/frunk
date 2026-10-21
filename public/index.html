@@ -343,6 +343,13 @@
     <form method="dialog" id="partyPickForm">
       <h2 tabindex="-1" autofocus>Choose what to play</h2>
       <div class="party-tabs" id="partyTabs"></div>
+      <div class="party-where">
+        <button type="button" class="pill small" id="partyPickBack" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+          Back
+        </button>
+        <span id="partyPickWhere"></span>
+      </div>
       <input name="q" type="search" class="party-search" placeholder="Search" autocomplete="off" enterkeyhint="search">
       <div class="party-results" id="partyPickList"></div>
       <div class="sheet-actions"><span class="spacer"></span><button type="button" class="pill" data-close>Cancel</button></div>

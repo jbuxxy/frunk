@@ -53,8 +53,9 @@ the browser into fullscreen with one tap.
   hosts, everyone else sees a **Join** button, and playback stays in step on
   every screen, with a chat, emoji and one-tap reactions that float over the
   video. The host picks who else may play, pause and skip. Hosts play from
-  their own Audiobookshelf account (connected under **Connected apps** in the
-  account menu); guests need nothing but Frunk. Admins also get a test video.
+  their own Plex or Audiobookshelf account (connected under **Connected apps**
+  in the account menu); guests need nothing but Frunk. Everyone watches one
+  Plex transcode, so the server does the work once. Admins also get a test video.
 - **No dependencies.** A single Node.js server with no npm packages, and a
   vanilla JS front end.
 
@@ -85,6 +86,7 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `TRUSTED_PROXIES` | Reverse-proxy IPs or CIDRs (comma-separated) whose `X-Real-IP` / `X-Forwarded-*` headers are trusted. Default `127.0.0.1,::1`. Without it, the login lockout sees only your proxy's address. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional Google sign-in. See [Google sign-in](docs/google-sign-in.md). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
+| `PLEX_URL` | Your Plex server, e.g. `https://plex.example.com`, for the Watch Party. People connect by entering a code at plex.tv/link; Frunk keeps a token for this server only. |
 | `ABS_URL` | Your Audiobookshelf server, e.g. `https://abs.example.com`, for the Watch Party. People connect their own account to it with an API key; Frunk only ever talks to this address. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
@@ -118,7 +120,7 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `server.js` | HTTP server: static files, JSON API, Google sign-in, phone pairing, icon and logo lookup |
 | `accounts.js` | Users, invites and sessions, stored in `DATA_DIR/accounts.json` |
 | `party.js` | Watch Party rooms: members, what's playing and where, who may control it (in memory) |
-| `apps.js` | Apps a Watch Party plays from (Audiobookshelf), on the servers named in the environment |
+| `apps.js` | Apps a Watch Party plays from (Plex, Audiobookshelf), on the servers named in the environment, and the stream proxy |
 | `fetcher.js` | Outbound fetches for user-supplied URLs, with private-network blocking |
 | `mailer.js` | Minimal SMTP client for invite emails |
 | `public/` | The launcher page (`index.html`, `app.js`, `style.css`) |

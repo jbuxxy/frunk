@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
-const { fakeCdn, fakeAbs, ABS_KEY, startServer, signUp, serverWithPeople } = require("./helpers");
+const { fakeCdn, fakeAbs, fakePlex, ABS_KEY, startServer, signUp, serverWithPeople } = require("./helpers");
 
 test("who can call what", async (t) => {
   const cdn = await fakeCdn();
@@ -435,7 +435,8 @@ test("watch party from Audiobookshelf: connect, browse, stream through Frunk", a
   const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
 
   // Connecting: only a key Audiobookshelf accepts, and the key never comes back.
-  assert.deepEqual((await srv.request("GET", "/api/apps", { cookie: member })).body, [{ id: "abs", name: "Audiobookshelf", host: "127.0.0.1", connected: false, account: null }]);
+  const [absApp] = (await srv.request("GET", "/api/apps", { cookie: member })).body;
+  assert.deepEqual([absApp.id, absApp.connect, absApp.connected, absApp.account], ["abs", "key", false, null]);
   assert.equal((await post("/api/party", member)).status, 403);
   const bad = await srv.request("PUT", "/api/apps/abs", { cookie: member, body: { token: "wrong" } });
   assert.deepEqual([bad.status, bad.body.error], [400, "Audiobookshelf didn't accept that key."]);
@@ -464,16 +465,18 @@ test("watch party from Audiobookshelf: connect, browse, stream through Frunk", a
   do msg = await guestEvents.nextOf("party"); while (!msg.party.state.media);
   const media = msg.party.state.media;
   assert.deepEqual([media.title, media.subtitle, media.kind], ["Project Hail Mary", "Andy Weir", "audio"]);
-  assert.equal(media.src, `/api/party/${code}/stream/1/output.m3u8`);
+  assert.equal(media.src, `/api/party/${code}/stream/1/0.m3u8`);
 
   // Any member streams it through Frunk, with the host's key; others can't.
   const playlist = await srv.request("GET", media.src, { cookie: admin });
   assert.equal(playlist.status, 200);
-  assert.match(playlist.body, /^output-0\.ts$/m, "segment paths point back at Frunk");
-  const segment = await fetch(`${srv.base}/api/party/${code}/stream/1/output-0.ts`, { headers: { cookie: admin } });
+  assert.match(playlist.body, /^1\.ts$/m, "segment paths point back at Frunk");
+  assert.doesNotMatch(playlist.body, /hls|sess/);
+  const segment = await fetch(`${srv.base}/api/party/${code}/stream/1/1.ts`, { headers: { cookie: admin } });
   assert.equal(await segment.text(), "segment-bytes");
   assert.equal((await srv.request("GET", media.src)).status, 401);
-  assert.equal((await srv.request("GET", `/api/party/${code}/stream/2/output.m3u8`, { cookie: admin })).status, 404);
+  assert.equal((await srv.request("GET", `/api/party/${code}/stream/2/0.m3u8`, { cookie: admin })).status, 404);
+  assert.equal((await srv.request("GET", `/api/party/${code}/stream/1/7.ts`, { cookie: admin })).status, 404, "only names it handed out");
   assert.equal((await srv.request("GET", `/api/party/${code}/stream/1/..%2fsecret`, { cookie: admin })).status, 404);
   const art = await srv.request("GET", media.art, { cookie: admin });
   assert.equal(art.headers.get("content-type"), "image/png");
@@ -492,4 +495,67 @@ test("watch party from Audiobookshelf: connect, browse, stream through Frunk", a
   // Disconnecting takes away hosting from it.
   await srv.request("DELETE", "/api/apps/abs", { cookie: member });
   assert.deepEqual((await srv.request("GET", "/api/party/sources", { cookie: member })).body, []);
+});
+
+test("watch party from Plex: link with a code, browse folders, one shared transcode", async (t) => {
+  const plex = await fakePlex();
+  const { srv, admin, member } = await serverWithPeople({ env: plex.env });
+  t.after(() => Promise.all([srv.stop(), plex.close()]));
+  const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
+
+  const [app] = (await srv.request("GET", "/api/apps", { cookie: member })).body;
+  assert.deepEqual([app.id, app.connect, app.linkAt], ["plex", "link", "plex.tv/link"]);
+  assert.equal((await srv.request("PUT", "/api/apps/plex", { cookie: member, body: { token: "x" } })).status, 404, "Plex links, no pasting");
+  assert.equal((await srv.request("GET", "/api/apps/plex/link", { cookie: member })).body.status, "expired");
+
+  // An account the server isn't shared with is turned away.
+  plex.shared = false;
+  plex.linked = true;
+  await post("/api/apps/plex/link", member);
+  assert.match((await srv.request("GET", "/api/apps/plex/link", { cookie: member })).body.error, /can't see this server/);
+  plex.shared = true;
+  plex.linked = false;
+
+  assert.deepEqual((await post("/api/apps/plex/link", member)).body, { code: "ABCD" });
+  assert.equal((await srv.request("GET", "/api/apps/plex/link", { cookie: member })).body.status, "waiting");
+  plex.linked = true; // the code was entered at plex.tv/link
+  assert.deepEqual((await srv.request("GET", "/api/apps/plex/link", { cookie: member })).body, { status: "connected", account: "jordan" });
+  const [source] = (await srv.request("GET", "/api/party/sources", { cookie: member })).body;
+  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv", "chromatix.app"]);
+
+  const { code } = (await post("/api/party", member)).body;
+  const host = (await post(`/api/party/${code}/join`, member)).body;
+  const guest = (await post(`/api/party/${code}/join`, admin)).body;
+  const browse = async (query) => (await srv.request("GET", `/api/party/${code}/browse/${host.member}?${new URLSearchParams({ source: "plex", ...query })}`, { cookie: member })).body;
+  assert.deepEqual((await browse({})).map((i) => [i.id, i.title, i.kind]), [["deck", "Continue watching", "folder"], ["s1", "Movies", "folder"], ["s2", "TV Shows", "folder"]]);
+  assert.deepEqual((await browse({ in: "s2" })).map((i) => [i.title, i.subtitle, i.kind]), [["Bluey", "3 seasons", "folder"]]);
+  assert.deepEqual((await browse({ in: "200" })).map((i) => [i.title, i.kind]), [["Season 1", "folder"]]);
+  assert.deepEqual(await browse({ in: "201" }), [{ id: "202", title: "Magic Xylophone", subtitle: "Bluey · S1E1", kind: "video", art: true }]);
+  assert.deepEqual((await browse({ q: "blu" })).map((i) => i.title), ["Bluey"], "photos aren't offered");
+
+  const load = (id) => post(`/api/party/${code}/control`, member, { member: host.member, action: "load", media: { source: "plex", id } });
+  assert.deepEqual((await load("200")).body, { error: "That can't be played." });
+  const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, admin);
+  assert.equal((await load("202")).status, 200);
+  let msg;
+  do msg = await guestEvents.nextOf("party"); while (!msg.party.state.media);
+  const media = msg.party.state.media;
+  assert.deepEqual([media.title, media.subtitle, media.kind], ["Bluey", "S1E1 · Magic Xylophone", "video"]);
+
+  // One transcode; its nested playlists come back as Frunk aliases.
+  const get = (path) => srv.request("GET", path, { cookie: admin });
+  const dir = media.src.replace(/[^/]+$/, "");
+  const master = await get(media.src);
+  assert.equal(master.body.trim().split("\n").pop(), "1.m3u8");
+  assert.equal((await get(`${dir}1.m3u8`)).body.trim().split("\n").find((l) => !l.startsWith("#")), "2.ts");
+  assert.equal((await fetch(`${srv.base}${dir}2.ts`, { headers: { cookie: admin } }).then((r) => r.text())), "plex-seg");
+  assert.deepEqual(plex.segmentTokens, ["server-token"]);
+  assert.equal(plex.started.length, 1);
+  assert.equal((await get(media.art)).headers.get("content-type"), "image/png");
+
+  // Something else: the first transcode is stopped.
+  assert.equal((await load("100")).status, 200);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(plex.stopped, [plex.started[0]]);
+  await guestEvents.close();
 });
