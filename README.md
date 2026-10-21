@@ -49,6 +49,11 @@ the browser into fullscreen with one tap.
   edits.
 - **Sign in with your phone.** The car shows a QR code, you approve it on your
   phone, and the car is signed in. There's no typing on the car's screen.
+- **Watch Party.** Watch together from different cars (or phones): one person
+  hosts, everyone else sees a **Join** button, and playback stays in step on
+  every screen. The host picks who else may play, pause and skip. For now it
+  plays a test video, for admins; Plex, Audiobookshelf and other apps that can
+  stream into it come next.
 - **No dependencies.** A single Node.js server with no npm packages, and a
   vanilla JS front end.
 
@@ -81,7 +86,6 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
-| `FRUNK_TURN_URLS`, `FRUNK_TURN_USERNAME`, `FRUNK_TURN_CREDENTIAL` | Optional TURN relay for the Watch Party car test's voice call, e.g. `turn:turn.example.com:3478`. Cars on LTE usually can't reach each other directly. |
 
 ## Development
 
@@ -105,28 +109,18 @@ push and pull request.
 To preview the car-only UI on a desktop, override the browser's user agent with
 one containing `Tesla` (Chrome DevTools → Network conditions).
 
-### Watch Party car test
-
-`/party/test` checks whether a car can run a Watch Party: the microphone, a
-voice call with a second car or phone, HLS video playback, the rear screen while
-driving, echo, and voice while another tab is open. Open it on both devices,
-signed in, and run the tests; **Send results** writes them to the server log
-(`docker compose logs frunk | grep "Car test"`). The call's audio goes device
-to device, using Google's public STUN server to find a route, or the TURN relay
-when `FRUNK_TURN_URLS` is set. The test video is a public sample stream from
-`test-streams.mux.dev`.
-
 ### Layout
 
 | File | What it does |
 | --- | --- |
 | `server.js` | HTTP server: static files, JSON API, Google sign-in, phone pairing, icon and logo lookup |
 | `accounts.js` | Users, invites and sessions, stored in `DATA_DIR/accounts.json` |
+| `party.js` | Watch Party rooms: members, what's playing and where, who may control it (in memory) |
 | `fetcher.js` | Outbound fetches for user-supplied URLs, with private-network blocking |
 | `mailer.js` | Minimal SMTP client for invite emails |
 | `public/` | The launcher page (`index.html`, `app.js`, `style.css`) |
 | `public/vendor/qrcode.min.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT |
-| `public/party-test.*` | The Watch Party car test page (`/party/test`) |
+| `public/party.js` | Watch Party: Host and Join, the party screen, playback kept in step |
 | `public/vendor/hls.min.js` | [hls.js](https://github.com/video-dev/hls.js) 1.5.17, Apache-2.0 |
 | `public/fonts/` | Inter and Rajdhani (Latin subset), SIL Open Font License |
 | `test/` | Unit, API and browser tests |

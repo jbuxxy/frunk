@@ -290,6 +290,13 @@
       name.className = "name";
       name.textContent = site.name;
       tile.append(name);
+      // In a Watch Party: apps that can play in it get a badge, the rest dim.
+      const partyState = frunk.party && frunk.party.tileState(site);
+      if (partyState === "locked") tile.classList.add("locked");
+      if (partyState === "party") {
+        tile.classList.add("party-app");
+        tile.insertAdjacentHTML("beforeend", '<span class="party-badge" aria-label="Plays in the party"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span>');
+      }
       grid.append(tile);
     }
 
@@ -514,7 +521,7 @@
     const tile = e.target.closest(".tile:not(.add)");
     if (!tile || editing) return;
     const site = sites.find((s) => s.id === tile.dataset.id);
-    if (site) launch(site);
+    if (site && !(frunk.party && frunk.party.tap(site))) launch(site);
   });
 
   // ---------- Tile menu (long-press) ----------
@@ -1457,13 +1464,20 @@
     await save(next);
   };
 
+  // ---------- Shared with party.js (Watch Party) ----------
+  const frunk = (window.frunk = {
+    api, toast, pressed, paintAvatar, loadQr, copyText, launch, render, openSignIn,
+    isTesla, inFullscreen, params, assetV: ASSET_V,
+    party: null, // set by party.js
+  });
+
   // ---------- Boot ----------
   (async () => {
     me = await api("/api/me").catch(() => me);
     renderAccount();
     // New account that hasn't chosen a color yet (Google sign-up skips the form).
     // Not mid-way through approving a car or an invite; it'll ask next visit.
-    const busy = location.pathname === "/pair" || /[?&](pair|invite|open)=/.test(location.search) || store.sget("frunk-pair");
+    const busy = location.pathname === "/pair" || /[?&](pair|invite|open|party)=/.test(location.search) || store.sget("frunk-pair");
     if (me.user && me.user.pickColor && !busy) openAvatarPicker(true);
     try {
       sites = await api("/api/sites");
@@ -1474,6 +1488,7 @@
     // Back from the fullscreen trip started by tapping a tile: open that tile.
     const pending = openAfterFullscreen && sites.find((x) => x.id === openAfterFullscreen);
     if (pending) return location.assign(pending.url);
+    if (frunk.party) frunk.party.start(me.user);
     const q = new URLSearchParams(location.search);
     if (q.get("signin_error")) {
       history.replaceState(null, "", "/");
