@@ -76,11 +76,16 @@
       setStatus("t-mic", "fail", { error: why });
       return false;
     }
+    // A refusal within a moment, with no prompt shown, means the browser
+    // decided by itself; the permission state says whether a "deny" was saved.
+    const permission = await navigator.permissions?.query({ name: "microphone" }).then((p) => p.state, () => "unknown") ?? "unknown";
+    const asked = Date.now();
     try {
       mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     } catch (err) {
-      $("micDetail").textContent = micError(err);
-      setStatus("t-mic", "fail", { error: err.name });
+      const ms = Date.now() - asked;
+      $("micDetail").textContent = `${micError(err)} (permission: ${permission}, answered in ${ms} ms${inFullscreen ? ", in fullscreen" : ""})`;
+      setStatus("t-mic", "fail", { error: err.name, message: err.message, permission, ms, fullscreen: inFullscreen });
       return false;
     }
     const track = mic.getAudioTracks()[0];
