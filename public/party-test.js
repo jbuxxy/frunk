@@ -158,6 +158,7 @@
   function showCall() {
     const state = pc ? pc.connectionState : "waiting";
     const parts = [remote ? `Call ${state}` : "Waiting for the other device…"];
+    if (!mic) parts.push("listen-only (no mic on this device)");
     if (stats.route) parts.push(stats.route);
     if (stats.rtt != null) parts.push(`${Math.round(stats.rtt * 1000)} ms round trip`);
     if (state === "failed") parts.push(room.iceServers.length > 1 ? "couldn't get through, even via TURN" : "couldn't get through; a TURN relay is probably needed (FRUNK_TURN_URLS)");
@@ -168,10 +169,11 @@
     if (pc) pc.close();
     pending = [];
     pc = new RTCPeerConnection({ iceServers: room.iceServers });
-    for (const track of mic.getTracks()) pc.addTrack(track, mic);
+    if (mic) for (const track of mic.getTracks()) pc.addTrack(track, mic);
+    else pc.addTransceiver("audio", { direction: "recvonly" });
     pc.onicecandidate = (e) => { if (e.candidate) signal({ candidate: e.candidate }); };
     pc.ontrack = (e) => {
-      remoteAudio.srcObject = e.streams[0];
+      remoteAudio.srcObject = e.streams[0] || new MediaStream([e.track]);
       remoteAudio.play().catch(() => {});
     };
     const self = pc;
@@ -224,8 +226,10 @@
     }
   }
 
+  // Without a mic (fullscreen refuses it) the call still runs, listen-only:
+  // receiving audio needs no permission.
   async function enterCall(code) {
-    if (!(await startMic())) return;
+    if (!(await startMic())) note("no microphone: joining listen-only");
     let joined;
     try {
       joined = await api("/api/party-test/join", { code });
@@ -234,7 +238,7 @@
       return;
     }
     room = joined;
-    setStatus("t-call", "running", { code: room.code, turn: room.iceServers.length > 1 });
+    setStatus("t-call", "running", { code: room.code, turn: room.iceServers.length > 1, listenOnly: !mic });
     $("callSetup").hidden = true;
     $("callLive").hidden = false;
     $("roomCode").textContent = room.code;
