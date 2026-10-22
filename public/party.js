@@ -508,12 +508,26 @@
       if (loadedSrc !== src) return;
       if (!window.Hls.isSupported()) return f.toast("This browser can't play this video.", 5000);
       hls = new window.Hls({ enableWorker: false });
+      // A dropped connection or a hiccup decoding: try to carry on, a few
+      // times, before saying it couldn't play.
+      let retries = 0;
+      const player = hls;
+      player.on(window.Hls.Events.ERROR, (_, d) => {
+        if (!d.fatal || player !== hls) return;
+        if (retries++ < 3 && d.type === window.Hls.ErrorTypes.NETWORK_ERROR) return player.startLoad();
+        if (retries <= 3 && d.type === window.Hls.ErrorTypes.MEDIA_ERROR) return player.recoverMediaError();
+        f.toast(`Couldn't play this (${d.details}). Try choosing it again.`, 6000);
+      });
+      player.on(window.Hls.Events.FRAG_LOADED, () => (retries = 0));
       hls.loadSource(src);
       hls.attachMedia(video);
     } else {
       video.src = src;
     }
   }
+  video.addEventListener("error", () => {
+    if (loadedSrc && !hls) f.toast("Couldn't play this. Try choosing it again.", 6000);
+  });
 
   // Twice a second: match the party's clock.
   function sync() {
