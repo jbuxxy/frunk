@@ -7,6 +7,9 @@ const crypto = require("node:crypto");
 // A stream from an app, played through Frunk. Members ask for short aliases
 // ("0.m3u8", "17.ts"), never the app's own addresses, and Frunk adds the
 // host's credentials. Playlists are rewritten so every entry is an alias too.
+// The entry playlist is fetched from the app once and reused: for Plex, asking
+// again restarts the conversion, so each new member would set everyone back.
+const PIECE_WAIT_MS = 10_000;
 function createStream({ entry, headers, stop = () => {} }) {
   const urls = [];
   const ids = new Map();
@@ -23,14 +26,30 @@ function createStream({ entry, headers, stop = () => {} }) {
     const url = urls[Number(/^(\d+)\./.exec(name)?.[1])];
     return url && alias(url) === name ? url : null;
   };
+  const entryName = alias(entry);
+  let entryCopy = null; // { text, type, url } once the app answered
   return {
-    entry: alias(entry),
+    entry: entryName,
     stop,
     // The upstream response for an alias, or null for one this stream never gave out.
-    fetch(name, range) {
+    async fetch(name, range) {
       const url = urlOf(name);
       if (!url) return null;
-      return fetch(url, { headers: { ...headers, ...(range ? { range } : {}) }, signal: AbortSignal.timeout(60_000) });
+      if (name === entryName && entryCopy) return copyResponse(entryCopy);
+      const get = () => fetch(url, { headers: { ...headers, ...(range ? { range } : {}) }, signal: AbortSignal.timeout(60_000) });
+      let r = await get();
+      // Apps convert as they go: right after a start or a long skip, a piece
+      // is "not found" for a few seconds. Wait for it here, so every player
+      // (each with its own retry rules) just sees it arrive a little late.
+      const waitUntil = Date.now() + PIECE_WAIT_MS;
+      while (r.status === 404 && !/\.m3u8$/.test(name) && Date.now() < waitUntil) {
+        await r.arrayBuffer().catch(() => {});
+        await new Promise((res) => setTimeout(res, 700));
+        r = await get();
+      }
+      if (name !== entryName || !r.ok) return r;
+      entryCopy = { text: await r.text(), type: r.headers.get("content-type"), url: r.url };
+      return copyResponse(entryCopy);
     },
     rewrite(text, base) {
       return text.split("\n").map((line) => {
@@ -41,6 +60,13 @@ function createStream({ entry, headers, stop = () => {} }) {
       }).join("\n");
     },
   };
+}
+
+// A Response for a kept playlist; url is where it came from, for its relative entries.
+function copyResponse({ text, type, url }) {
+  const r = new Response(text, { headers: { "content-type": type || "application/vnd.apple.mpegurl" } });
+  Object.defineProperty(r, "url", { value: url });
+  return r;
 }
 
 // Audiobookshelf, connected with an API key. Books play through its HLS
@@ -218,6 +244,10 @@ function createPlex(baseUrl, plexTv = "https://plex.tv") {
       });
       const kind = audio ? "music" : "video";
       const universal = `${base}/${kind}/:/transcode/universal`;
+      // Plex's own players ask for a decision first; without it Plex refuses
+      // every other start. It also says when something can't be played at all.
+      const decision = (await call(`${universal}/decision?${params}`, token)).MediaContainer || {};
+      if (decision.generalDecisionCode >= 2000) throw new Error(`Plex can't play that: ${decision.generalDecisionText || "no way to convert it"}.`);
       const keepAlive = setInterval(() => fetch(`${universal}/ping?session=${session}`, { headers: plexHeaders(token) }).catch(() => {}), 30_000);
       keepAlive.unref();
       return {

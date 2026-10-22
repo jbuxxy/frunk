@@ -55,7 +55,8 @@ async function fakeCdn() {
 // and a cover. Only Bearer KEY gets in. closed lists sessions that ended.
 const ABS_KEY = "abs-test-key";
 async function fakeAbs() {
-  const abs = { hits: {}, closed: [] };
+  // notReady: pieces answer "not found" this many times first, like a stream still converting.
+  const abs = { hits: {}, closed: [], notReady: 0 };
   const book = { id: "li_1", media: { metadata: { title: "Project Hail Mary", authorName: "Andy Weir" } } };
   const server = http.createServer((req, res) => {
     const { pathname, searchParams } = new URL(req.url, "http://x");
@@ -75,7 +76,10 @@ async function fakeAbs() {
     }
     let m;
     if ((m = /^\/hls\/(sess\d+)\/output\.m3u8$/.exec(pathname))) return send("application/vnd.apple.mpegurl", `#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n/hls/${m[1]}/output-0.ts\n#EXT-X-ENDLIST\n`);
-    if (/^\/hls\/sess\d+\/output-0\.ts$/.test(pathname)) return send("video/mp2t", Buffer.from("segment-bytes"));
+    if (/^\/hls\/sess\d+\/output-0\.ts$/.test(pathname)) {
+      if (abs.notReady > 0 && abs.notReady--) return res.writeHead(404).end("Not Found");
+      return send("video/mp2t", Buffer.from("segment-bytes"));
+    }
     if (pathname === "/api/items/li_1/cover") return send("image/png", png());
     if ((m = /^\/api\/session\/(sess\d+)\/close$/.exec(pathname))) {
       abs.closed.push(m[1]);
@@ -96,7 +100,9 @@ async function fakeAbs() {
 // account one this server isn't shared with. Only X-Plex-Token: server-token
 // gets into the library. started/stopped list transcode sessions.
 async function fakePlex() {
-  const plex = { linked: false, shared: true, started: [], stopped: [], segmentTokens: [] };
+  // decided: sessions Plex was asked about first (it refuses to start others);
+  // decisionCode: 2000+ for something that can't be played.
+  const plex = { linked: false, shared: true, started: [], stopped: [], segmentTokens: [], decided: new Set(), decisionCode: 1001 };
   const movie = { ratingKey: "100", type: "movie", title: "Arrival", year: 2016, thumb: "/t/100" };
   const show = { ratingKey: "200", type: "show", title: "Bluey", childCount: 3, thumb: "/t/200" };
   const season = { ratingKey: "201", type: "season", title: "Season 1", parentTitle: "Bluey" };
@@ -121,7 +127,12 @@ async function fakePlex() {
     if (one) return list([one]);
     if (pathname === "/hubs/search") return json({ MediaContainer: { Hub: [{ Metadata: /blu/i.test(searchParams.get("query")) ? [show, { ratingKey: "9", type: "photo", title: "Bluey photo" }] : [] }] } });
     const base = "/video/:/transcode/universal";
+    if (pathname === `${base}/decision`) {
+      plex.decided.add(searchParams.get("session"));
+      return json({ MediaContainer: { generalDecisionCode: plex.decisionCode, generalDecisionText: plex.decisionCode >= 2000 ? "No way to play it" : "Conversion OK." } });
+    }
     if (pathname === `${base}/start.m3u8`) {
+      if (!plex.decided.has(searchParams.get("session"))) return res.writeHead(400).end("Bad Request");
       plex.started.push(searchParams.get("session"));
       return res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" }).end(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000\nsession/${searchParams.get("session")}/base/index.m3u8\n`);
     }

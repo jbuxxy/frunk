@@ -377,6 +377,8 @@ test("watch party: hosting, joining, who controls what", async (t) => {
   const paused = await guestEvents.next();
   assert.deepEqual([paused.event, paused.party.state.playing, paused.party.state.position], [{ kind: "pause", by: "Member" }, false, 12.5]);
   assert.equal((await control(member, guest.member, { action: "seek", position: -3 })).status, 400);
+  assert.equal((await control(member, guest.member, { action: "seek", position: 40 * 3600 })).status, 200, "near the end of a long audiobook");
+  assert.equal((await guestEvents.next()).party.state.position, 40 * 3600);
 
   // Co-pilots may also choose what plays.
   await post(`/api/party/${code}/settings`, admin, { member: host.member, mode: "copilots", copilots: [guest.member] });
@@ -472,8 +474,10 @@ test("watch party from Audiobookshelf: connect, browse, stream through Frunk", a
   assert.equal(playlist.status, 200);
   assert.match(playlist.body, /^1\.ts$/m, "segment paths point back at Frunk");
   assert.doesNotMatch(playlist.body, /hls|sess/);
+  abs.notReady = 2; // still converting: Frunk waits for it rather than passing on "not found"
   const segment = await fetch(`${srv.base}/api/party/${code}/stream/1/1.ts`, { headers: { cookie: admin } });
   assert.equal(await segment.text(), "segment-bytes");
+  assert.equal(abs.notReady, 0);
   assert.equal((await srv.request("GET", media.src)).status, 401);
   assert.equal((await srv.request("GET", `/api/party/${code}/stream/2/0.m3u8`, { cookie: admin })).status, 404);
   assert.equal((await srv.request("GET", `/api/party/${code}/stream/1/7.ts`, { cookie: admin })).status, 404, "only names it handed out");
@@ -547,11 +551,17 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
   const dir = media.src.replace(/[^/]+$/, "");
   const master = await get(media.src);
   assert.equal(master.body.trim().split("\n").pop(), "1.m3u8");
+  assert.equal((await srv.request("GET", media.src, { cookie: member })).body, master.body, "a second player gets the same start");
   assert.equal((await get(`${dir}1.m3u8`)).body.trim().split("\n").find((l) => !l.startsWith("#")), "2.ts");
   assert.equal((await fetch(`${srv.base}${dir}2.ts`, { headers: { cookie: admin } }).then((r) => r.text())), "plex-seg");
   assert.deepEqual(plex.segmentTokens, ["server-token"]);
-  assert.equal(plex.started.length, 1);
+  assert.equal(plex.started.length, 1, "Plex was asked to start once, for everyone");
   assert.equal((await get(media.art)).headers.get("content-type"), "image/png");
+
+  // Something Plex can't play at all says so, up front.
+  plex.decisionCode = 2000;
+  assert.match((await load("100")).body.error, /^Plex can't play that/);
+  plex.decisionCode = 1001;
 
   // Something else: the first transcode is stopped.
   assert.equal((await load("100")).status, 200);
