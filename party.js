@@ -434,7 +434,8 @@ function createParties({ sourcesFor, browse, start, art, person }) {
         text = String(text || "").trim();
         if (!text) return "Type a message first.";
         if (text.length > CHAT_MAX_CHARS) return `Keep it under ${CHAT_MAX_CHARS} characters.`;
-        const message = { id: crypto.randomBytes(6).toString("base64url"), at: now, name: w.name, color: w.color, guest: !!w.guest, text };
+        // from: the sending screen, so someone's other screens still get notified.
+        const message = { id: crypto.randomBytes(6).toString("base64url"), at: now, from: memberId, name: w.name, color: w.color, guest: !!w.guest, text };
         p.chat.push(message);
         if (p.chat.length > CHAT_KEEP) p.chat.shift();
         msg = { type: "chat", message };

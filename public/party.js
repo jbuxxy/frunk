@@ -630,7 +630,8 @@
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
     list.append(messageEl(m));
     if (atBottom) scrollChat();
-    const mine = m.name === (me ? me.name || me.email : guestName);
+    // Sent from this screen; your other screens (phone and car) still count as others.
+    const mine = session && m.from === session.member;
     if (mine || (!$("partyChat").hidden && !view.classList.contains("mini"))) return;
     unread++;
     showUnread();
@@ -744,9 +745,19 @@
     input.value = "";
     if (!(await say({ text }))) input.value = text; // keep it to try again
   };
+  // The car's keyboard covers the bottom of the screen without moving the page,
+  // so while typing there, the chat moves into the top half (style.css).
+  const input = $("partyChatForm").text;
+  input.addEventListener("focus", () => {
+    if (!f.isTesla) return;
+    $("partyChat").classList.add("typing");
+    scrollChat();
+  });
+  input.addEventListener("blur", () => $("partyChat").classList.remove("typing"));
   for (const emoji of EMOJI) {
     const b = document.createElement("button");
     b.type = "button";
+    b.onpointerdown = (e) => e.preventDefault(); // keep the keyboard up while adding emoji
     b.append(emojiImg(emoji));
     b.setAttribute("aria-label", `Add ${emoji}`);
     b.onclick = () => {

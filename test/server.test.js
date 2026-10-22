@@ -409,7 +409,7 @@ test("watch party chat: messages, history for newcomers, reactions", async (t) =
   assert.equal((await say(admin, host.member, { text: "x".repeat(501) })).status, 400);
   assert.equal((await say(admin, host.member, { text: " Popcorn ready? 🍿 " })).status, 200);
   const { message } = await hostEvents.nextOf("chat");
-  assert.deepEqual([message.name, message.text], ["owner", "Popcorn ready? 🍿"]);
+  assert.deepEqual([message.name, message.text, message.from], ["owner", "Popcorn ready? 🍿", host.member]);
 
   // Someone joining later gets what's been said.
   const guest = (await post(`/api/party/${code}/join`, member)).body;

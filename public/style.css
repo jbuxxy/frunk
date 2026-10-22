@@ -638,6 +638,9 @@ img.emoji { width: 1.2em; height: 1.2em; vertical-align: -.25em; }
   border: 2px solid var(--line); border-radius: 16px; background: var(--bg); color: var(--text); font: inherit; font-size: 19px;
 }
 .party-chat-form input:focus { outline: none; border-color: var(--accent); }
+/* Typing in the car: its keyboard covers the lower half of the screen without
+   moving the page, so the chat shrinks to the top half, box just above the keys. */
+.party-chat.typing { bottom: 55%; border-radius: 0 0 0 24px; }
 /* The controls make room for the open chat. */
 .party.chatting .party-controls, .party.chatting .party-top { right: min(420px, 100%); }
 .party.chatting .party-who { right: min(420px, 100%); }
