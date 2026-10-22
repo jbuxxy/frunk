@@ -561,10 +561,38 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 body.in-party .grid { padding-bottom: 280px; } /* room to scroll past the mini player */
 
 .party-row { justify-content: flex-start !important; gap: 14px; text-align: left; }
-.party-row.on { box-shadow: var(--ring); }
-.party-tag { margin-left: auto; font-size: 15px; color: var(--muted); }
-.party-row.on .party-tag { color: var(--green); }
-.party-copilots { margin-top: 20px; }
+.party-tag { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+
+/* Party choices (setup and settings) and the people in it */
+.party-choice { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.party-choice .pill.small { background: var(--bg); }
+.party-choice .pill.small.on { background: var(--accent); color: #fff; }
+.party-people-list { display: grid; gap: 10px; }
+.party-person { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px 10px 14px; border-radius: 16px; background: var(--bg); }
+.party-person-name { flex: 1; min-width: 140px; display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; }
+.party-person .pill.small.on { background: rgba(52, 199, 89, .16); color: var(--green); }
+.party-knock-who { display: flex; justify-content: center; margin-bottom: 12px; }
+.party-knock-who .party-dot { width: 72px; height: 72px; font-size: 32px; }
+#partyKnock h2 { text-align: center; }
+#partyKnock .hint { text-align: center; }
+
+/* Chat sound on/off */
+.party-chat-head h3 { flex: 1; }
+.party-chat-head { gap: 8px; }
+.party-mute .i-off, .party-mute.off .i-on { display: none; }
+.party-mute.off .i-off { display: block; }
+.party-mute.off { color: var(--muted); }
+
+/* A new message while the party is minimized */
+.party-notice {
+  position: fixed; top: 104px; left: 50%; transform: translateX(-50%); z-index: 30; /* under the top bar */
+  display: flex; align-items: center; gap: 12px; max-width: min(640px, calc(100vw - 32px));
+  padding: 10px 22px 10px 10px; border: 0; border-radius: 999px;
+  background: var(--raised); color: var(--text); font-size: 18px; text-align: left;
+  box-shadow: 0 10px 30px rgba(0,0,0,.5); animation: party-in .25s ease-out;
+}
+.party-notice[hidden] { display: none; }
+.party-notice span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Chat */
 .party-chat-btn { position: relative; }

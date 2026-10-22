@@ -347,7 +347,7 @@ test("watch party: hosting, joining, who controls what", async (t) => {
   assert.equal((await post(`/api/party/${code}/join`, admin, { member: host.member })).body.member, host.member);
   const guest = (await post(`/api/party/${code.toLowerCase()}/join`, member, { member: host.member })).body;
   assert.notEqual(guest.member, host.member);
-  assert.deepEqual(guest.party.you, { host: false, control: false, choose: false });
+  assert.deepEqual(guest.party.you, { host: false, guest: false, control: false, choose: false });
   assert.equal(guest.party.people.length, 2);
 
   const hostEvents = await events(srv, `/api/party/${code}/events/${host.member}`, admin);
@@ -380,7 +380,7 @@ test("watch party: hosting, joining, who controls what", async (t) => {
 
   // Co-pilots may also choose what plays.
   await post(`/api/party/${code}/settings`, admin, { member: host.member, mode: "copilots", copilots: [guest.member] });
-  assert.deepEqual((await guestEvents.next()).party.you, { host: false, control: true, choose: true });
+  assert.deepEqual((await guestEvents.next()).party.you, { host: false, guest: false, control: true, choose: true });
   assert.equal((await srv.request("GET", `/api/party/${code}/sources/${guest.member}`, { cookie: member })).body[0].id, "test");
 
   // Only the host can end it; everyone is told, and it leaves the lobby.
@@ -558,4 +558,73 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
   await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(plex.stopped, [plex.started[0]]);
   await guestEvents.close();
+});
+
+test("watch party guests and asking to join: approve, deny, remove", async (t) => {
+  const { srv, admin, member } = await serverWithPeople();
+  t.after(() => srv.stop());
+  const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
+  const { code } = (await post("/api/party", admin, { mode: "host", access: { accounts: "ask", guests: "ask" } })).body;
+  const host = (await post(`/api/party/${code}/join`, admin)).body;
+  assert.equal(host.party.access.guests, "ask");
+  const hostEvents = await events(srv, `/api/party/${code}/events/${host.member}`, admin);
+  const answer = (request, allow) => post(`/api/party/${code}/answer`, admin, { member: host.member, request, allow });
+
+  // Signed out: whose party it is, then join as a guest, who asks first.
+  assert.equal((await srv.request("GET", "/api/party/ZZZZ/info")).status, 404);
+  assert.deepEqual((await srv.request("GET", `/api/party/${code}/info`)).body, { code, host: "owner", guests: "ask" });
+  assert.equal((await post(`/api/party/${code}/guest`, undefined, { name: "  " })).status, 403);
+  const knocked = await post(`/api/party/${code}/guest`, undefined, { name: "Emma" });
+  assert.equal(knocked.status, 202);
+  const emma = knocked.headers.getSetCookie().find((c) => c.startsWith("frunk_guest=")).split(";")[0];
+  const { request } = await hostEvents.nextOf("knock");
+  assert.deepEqual([request.name, request.guest], ["Emma", true]);
+  assert.equal((await srv.request("GET", `/api/party/${code}/request`, { cookie: emma })).body.status, "waiting");
+  assert.equal((await post(`/api/party/${code}/join`, emma)).status, 202, "still asking");
+  assert.equal((await post(`/api/party/${code}/join`)).status, 401, "no account, no guest pass");
+
+  assert.equal((await post(`/api/party/${code}/answer`, member, { member: "x", request: request.id, allow: true })).status, 400);
+  assert.equal((await answer(request.id, true)).status, 200);
+  assert.equal((await hostEvents.nextOf("knock-done")).id, request.id);
+  assert.equal((await answer(request.id, true)).status, 400, "already answered");
+  assert.equal((await srv.request("GET", `/api/party/${code}/request`, { cookie: emma })).body.status, "allowed");
+  const guest = (await post(`/api/party/${code}/join`, emma)).body;
+  assert.deepEqual(guest.party.you, { host: false, guest: true, control: false, choose: false });
+  assert.deepEqual(guest.party.people.map((p) => [p.name, p.guest]), [["owner", false], ["Emma", true]]);
+
+  // A guest watches and chats, but can't pick, browse or host, even as a co-pilot.
+  assert.equal((await post(`/api/party/${code}/chat`, emma, { member: guest.member, text: "hi!" })).status, 200);
+  assert.equal((await hostEvents.nextOf("chat")).message.guest, true);
+  await post(`/api/party/${code}/settings`, admin, { member: host.member, mode: "copilots", copilots: [guest.member] });
+  assert.deepEqual((await hostEvents.nextOf("party")).party.people.find((p) => p.guest).copilot, false);
+  assert.equal((await srv.request("GET", `/api/party/${code}/sources/${guest.member}`, { cookie: emma })).status, 401);
+  assert.equal((await post("/api/party", emma)).status, 401);
+  assert.equal((await srv.request("GET", "/api/sites", { cookie: emma })).body.length, 9, "the default page, not anyone's");
+
+  // A Frunk account asks too ("accounts: ask"), and can be turned down.
+  assert.equal((await post(`/api/party/${code}/join`, member)).status, 202);
+  const memberKnock = (await hostEvents.nextOf("knock")).request;
+  assert.equal(memberKnock.guest, false);
+  await answer(memberKnock.id, false);
+  assert.equal((await srv.request("GET", `/api/party/${code}/request`, { cookie: member })).body.status, "denied");
+
+  // Removed: told so, and can't come back.
+  const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, emma);
+  await guestEvents.nextOf("party");
+  assert.equal((await post(`/api/party/${code}/remove`, admin, { member: host.member, person: host.member })).status, 400, "not the host");
+  assert.equal((await post(`/api/party/${code}/remove`, admin, { member: host.member, person: guest.member })).status, 200);
+  assert.deepEqual(await guestEvents.nextOf("removed"), { type: "removed", by: "owner" });
+  assert.deepEqual((await post(`/api/party/${code}/join`, emma)).body, { error: "owner removed you from this party." });
+  assert.equal((await srv.request("GET", `/api/party/${code}/request`, { cookie: emma })).body.status, "removed");
+
+  // No guests at all; and a guest pass only works for its own party.
+  assert.equal((await post(`/api/party/${code}/settings`, admin, { member: host.member, access: { guests: "maybe" } })).status, 400);
+  await post(`/api/party/${code}/settings`, admin, { member: host.member, access: { guests: "no" } });
+  assert.deepEqual((await post(`/api/party/${code}/guest`, undefined, { name: "Sam" })).body, { error: "This party is only for people with a Frunk account." });
+  await post(`/api/party/${code}/settings`, admin, { member: host.member, access: { guests: "open" } });
+  const sam = await post(`/api/party/${code}/guest`, undefined, { name: "Sam" });
+  assert.equal(sam.status, 200, "open to guests: straight in");
+  const other = (await post("/api/party", member)).status;
+  assert.equal(other, 403, "member has nothing to host from");
+  await Promise.all([hostEvents.close(), guestEvents.close()]);
 });

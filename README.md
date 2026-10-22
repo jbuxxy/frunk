@@ -56,6 +56,10 @@ the browser into fullscreen with one tap.
   their own Plex or Audiobookshelf account (connected under **Connected apps**
   in the account menu); guests need nothing but Frunk. Everyone watches one
   Plex transcode, so the server does the work once. Admins also get a test video.
+  The host chooses who can join (people with an account right away or after
+  asking; people without one not at all, after asking, or right away, as a
+  guest of that one party) and can remove anyone. New chat messages chime and
+  show a banner while the party is minimized.
 - **No dependencies.** A single Node.js server with no npm packages, and a
   vanilla JS front end.
 
@@ -161,6 +165,10 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
   account on the server and never sent back to a browser.
 - Guests stream what the host plays through Frunk, and only while they're in
   that party; each new choice gets new addresses.
+- A guest without an account gets a pass (an HttpOnly cookie) for that one
+  party: it reaches the party's own routes and nothing else, can't choose what
+  plays, and stops working when the party ends or the host removes them. Guest
+  joins and code lookups are rate-limited per IP.
 
 **Admin powers**
 - The admin can reset any member's password, because a reset is an invite link
