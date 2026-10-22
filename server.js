@@ -781,9 +781,11 @@ function serveStatic(req, res, pathname) {
 }
 
 // ---------- Routes ----------
-// Each route names who may call it ("anyone", "user" or "admin"), checked in one
-// place below, so where a route sits in the list never decides who can reach it.
-// ":name" path segments arrive in params; handlers get { req, res, url, params, user }.
+// Each route names who may call it ("anyone", "user", "admin", or "party": a
+// signed-in account or a guest of the party in :code), checked in one place
+// below, so where a route sits in the list never decides who can reach it.
+// ":name" path segments arrive in params; handlers get { req, res, url, params,
+// user, who }, who being the caller's identity in that party.
 const routes = [];
 function on(method, pattern, access, handler) {
   const keys = [];
@@ -1118,20 +1120,47 @@ on("DELETE", "/api/apps/:id", "user", ({ res, params, user }) => {
   return json(res, 200, { ok: true });
 });
 
-on("GET", "/api/party/time", "user", ({ res }) => json(res, 200, { now: Date.now() }));
+// Party routes take "party" access where guests may call them too, with who
+// as the caller's identity; hosting, choosing and settings need an account.
+const GUEST_COOKIE = "frunk_guest";
+const guestStarts = new Map(); // ip -> { count, since }: guest joins and code lookups
+on("GET", "/api/party/time", "anyone", ({ res }) => json(res, 200, { now: Date.now() }));
 on("GET", "/api/party/sources", "user", ({ res, user }) => json(res, 200, parties.sourcesFor(user.id)));
 on("GET", "/api/party/lobby", "user", ({ req, res, user }) => parties.watchLobby(req, res, user.id));
-on("POST", "/api/party", "user", ({ res, user }) => {
+on("POST", "/api/party", "user", async ({ req, res, user }) => {
   if (!parties.canHost(user.id)) return json(res, 403, { error: "Connect an app that can host a Watch Party first." });
-  return json(res, 200, { code: parties.create(user.id) });
+  const { mode, access } = (await readBody(req)) || {};
+  return json(res, 200, { code: parties.create(user.id, { mode, access }) });
 });
-on("POST", "/api/party/:code/join", "user", async ({ req, res, params, user }) => {
-  const joined = parties.join(params.code, user.id, ((await readBody(req)) || {}).member);
-  if (!joined) return json(res, 404, { error: "That party has ended." });
-  return json(res, 200, joined);
+function joined(res, r) {
+  if (!r) return json(res, 404, { error: "That party has ended." });
+  if (r.error) return json(res, 403, { error: r.error });
+  if (r.waiting) return json(res, 202, { waiting: true });
+  return json(res, 200, r);
+}
+on("POST", "/api/party/:code/join", "party", async ({ req, res, params, who }) => {
+  return joined(res, parties.join(params.code, who, ((await readBody(req)) || {}).member));
 });
-on("GET", "/api/party/:code/events/:member", "user", ({ req, res, params, user }) => {
-  if (!parties.stream(params.code, params.member, user.id, req, res)) return json(res, 404, { error: "You're not in that party." });
+// Signed out: whose party this is and whether guests can come; then join as one.
+on("GET", "/api/party/:code/info", "anyone", ({ req, res, params }) => {
+  const ip = clientIp(req);
+  if (overLimit(guestStarts, ip, 60)) return json(res, 429, { error: "Too many attempts. Try again later." });
+  noteAttempt(guestStarts, ip);
+  const info = parties.info(params.code);
+  return info ? json(res, 200, info) : json(res, 404, { error: "No party with that code." });
+});
+on("POST", "/api/party/:code/guest", "anyone", async ({ req, res, params }) => {
+  const ip = clientIp(req);
+  if (overLimit(guestStarts, ip, 60)) return json(res, 429, { error: "Too many attempts. Try again later." });
+  noteAttempt(guestStarts, ip);
+  const guest = parties.addGuest(params.code, ((await readBody(req)) || {}).name);
+  if (!guest || guest.error) return joined(res, guest);
+  setCookie(res, req, GUEST_COOKIE, guest.token, 12 * 3600);
+  return joined(res, parties.join(params.code, guest.id));
+});
+on("GET", "/api/party/:code/request", "party", ({ res, params, who }) => json(res, 200, { status: parties.requestStatus(params.code, who) }));
+on("GET", "/api/party/:code/events/:member", "party", ({ req, res, params, who }) => {
+  if (!parties.stream(params.code, params.member, who, req, res)) return json(res, 404, { error: "You're not in that party." });
 });
 on("GET", "/api/party/:code/sources/:member", "user", ({ res, params, user }) => {
   const sources = parties.sourcesOf(params.code, params.member, user.id);
@@ -1152,8 +1181,8 @@ on("GET", "/api/party/:code/browse/:member", "user", async ({ res, url, params, 
 // The playing stream's playlists and pieces, fetched from the host's app with
 // the host's key. Names are aliases the stream handed out (apps.js), and
 // playlists are rewritten so the player only ever asks here.
-on("GET", "/api/party/:code/stream/:load/:file", "user", async ({ req, res, params, user }) => {
-  const stream = parties.streamFor(params.code, user.id, params.load);
+on("GET", "/api/party/:code/stream/:load/:file", "party", async ({ req, res, params, who }) => {
+  const stream = parties.streamFor(params.code, who, params.load);
   let r;
   try {
     r = stream && (await stream.fetch(params.file, req.headers.range));
@@ -1175,24 +1204,24 @@ on("GET", "/api/party/:code/stream/:load/:file", "user", async ({ req, res, para
   req.on("close", () => body.destroy());
   body.pipe(res);
 });
-on("GET", "/api/party/:code/art/:source/:item", "user", async ({ res, params, user }) => {
+on("GET", "/api/party/:code/art/:source/:item", "party", async ({ res, params, who }) => {
   let r;
   try {
-    r = await parties.artFor(params.code, user.id, params.source, decodeURIComponent(params.item));
+    r = await parties.artFor(params.code, who, params.source, decodeURIComponent(params.item));
   } catch {}
   const type = r && r.ok && r.headers.get("content-type");
   if (!type || !/^image\/(png|jpeg|webp|gif|avif)/.test(type)) return json(res, 404, { error: "no art" });
   return sendImage(res, type, Buffer.from(await r.arrayBuffer()), "private, max-age=86400");
 });
-for (const action of ["control", "settings", "chat"]) {
-  on("POST", `/api/party/:code/${action}`, "user", async ({ req, res, params, user }) => {
+for (const [action, access] of [["control", "party"], ["chat", "party"], ["settings", "user"], ["answer", "user"], ["remove", "user"]]) {
+  on("POST", `/api/party/:code/${action}`, access, async ({ req, res, params, who, user }) => {
     const body = (await readBody(req)) || {};
-    const error = await parties[action](params.code, body.member, user.id, body);
+    const error = await parties[action](params.code, body.member, who || user.id, body);
     return error ? json(res, 400, { error }) : json(res, 200, { ok: true });
   });
 }
-on("POST", "/api/party/:code/leave", "user", async ({ req, res, params, user }) => {
-  parties.leave(params.code, ((await readBody(req)) || {}).member, user.id);
+on("POST", "/api/party/:code/leave", "party", async ({ req, res, params, who }) => {
+  parties.leave(params.code, ((await readBody(req)) || {}).member, who);
   return json(res, 200, { ok: true });
 });
 on("POST", "/api/party/:code/end", "user", ({ res, params, user }) => {
@@ -1216,10 +1245,12 @@ const server = http.createServer(async (req, res) => {
       if (r.method !== req.method) continue;
       const m = r.re.exec(pathname);
       if (!m) continue;
-      if (r.access !== "anyone" && !user) return json(res, 401, { error: "Sign in first." });
-      if (r.access === "admin" && !user.admin) return json(res, 403, { error: "Admins only." });
       const params = Object.fromEntries(r.keys.map((key, i) => [key, m[i + 1]]));
-      return await r.handler({ req, res, url, params, user });
+      const who = r.access === "party" ? (user ? user.id : parties.guestId(params.code, cookies(req)[GUEST_COOKIE])) : null;
+      if (r.access === "party" && !who) return json(res, 401, { error: "Join the party first." });
+      if (!["anyone", "party"].includes(r.access) && !user) return json(res, 401, { error: "Sign in first." });
+      if (r.access === "admin" && !user.admin) return json(res, 403, { error: "Admins only." });
+      return await r.handler({ req, res, url, params, user, who });
     }
 
     if (pathname.startsWith("/api/")) return json(res, 404, { error: "not found" });

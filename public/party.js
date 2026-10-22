@@ -12,6 +12,9 @@
     get(k) { try { return JSON.parse(sessionStorage.getItem(k)); } catch { return null; } },
     set(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} },
     del(k) { try { sessionStorage.removeItem(k); } catch {} },
+    // Kept between visits: the host's party choices, a guest's name, chat sound.
+    lget(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+    lset(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
   };
 
   let me = null;
@@ -93,7 +96,7 @@
   function dot(who) {
     const el = document.createElement("span");
     el.className = "party-dot";
-    f.paintAvatar(el, who.color || "#3e6ae1", who.name);
+    f.paintAvatar(el, who.color || (who.guest ? "#5f6670" : "#3e6ae1"), who.name); // guests are grey
     return el;
   }
 
@@ -107,18 +110,56 @@
     };
   }
 
-  // ---------- Hosting and joining ----------
-  async function host() {
-    try {
-      const { code } = await f.api("/api/party", { method: "POST", body: "{}" });
-      await join(code);
-      if (party && party.you.choose && !party.state.media) openPicker();
-    } catch (err) {
-      f.toast(err.message, 4000);
-    }
+  // ---------- Party choices: who can join, who controls ----------
+  // The same choices make up the setup sheet (before hosting) and the party's
+  // settings (sliders icon). values: { accounts, guests, mode }.
+  const CHOICES = [
+    { key: "accounts", label: "People with a Frunk account", options: [["open", "Join right away"], ["ask", "Ask me first"]] },
+    { key: "guests", label: "People without an account", options: [["no", "Can't join"], ["ask", "Ask me first"], ["open", "Join right away"]] },
+    { key: "mode", label: "Who can control playback", options: [["host", "Only me"], ["everyone", "Everyone: play, pause, skip"], ["copilots", "Co-pilots I pick"]] },
+  ];
+  const DEFAULT_CHOICES = { accounts: "open", guests: "ask", mode: "host" };
+  function renderChoices(box, values, onPick) {
+    box.replaceChildren(...CHOICES.flatMap(({ key, label, options }) => {
+      const title = Object.assign(document.createElement("div"), { className: "field-label", textContent: label });
+      const row = document.createElement("div");
+      row.className = "party-choice";
+      for (const [value, text] of options) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = `pill small${values[key] === value ? " on" : ""}`;
+        b.textContent = text;
+        b.onclick = () => onPick(key, value);
+        row.append(b);
+      }
+      return [title, row];
+    }));
   }
 
-  async function join(code, { quiet = false } = {}) {
+  // ---------- Hosting and joining ----------
+  // Hosting starts with the setup sheet; Frunk remembers the choices.
+  function host() {
+    let values = { ...DEFAULT_CHOICES, ...store.lget("frunk-party-choices") };
+    const paint = () => renderChoices($("partySetupChoices"), values, (key, value) => {
+      values = { ...values, [key]: value };
+      paint();
+    });
+    paint();
+    $("partySetupStart").onclick = () => f.pressed($("partySetupStart"), async () => {
+      store.lset("frunk-party-choices", values);
+      const { code } = await f.api("/api/party", {
+        method: "POST",
+        body: JSON.stringify({ mode: values.mode, access: { accounts: values.accounts, guests: values.guests } }),
+      });
+      $("partySetup").close();
+      await join(code);
+      if (party && party.you.choose && !party.state.media) openPicker();
+    });
+    $("partySetup").showModal();
+  }
+
+  // hostName: for the waiting screen, if someone has to let us in.
+  async function join(code, { quiet = false, hostName } = {}) {
     const saved = store.get("frunk-party");
     let r;
     try {
@@ -131,6 +172,11 @@
       if (!quiet) f.toast(err.message, 4000);
       return;
     }
+    if (r.waiting) return waitFor(code, hostName || (lobby.find((x) => x.code === code) || {}).host?.name);
+    await enter(r);
+  }
+
+  async function enter(r) {
     session = { code: r.party.code, member: r.member };
     store.set("frunk-party", session);
     if (!clockSynced) await syncClock().catch(() => {});
@@ -152,6 +198,9 @@
       else if (msg.type === "chat") addMessage(msg.message);
       else if (msg.type === "react") floatReaction(msg);
       else if (msg.type === "ended") finish(msg.by ? `${msg.by} ended the party.` : "The party has ended.");
+      else if (msg.type === "removed") finish(`${msg.by} removed you from the party.`);
+      else if (msg.type === "knock") knocked(msg.request);
+      else if (msg.type === "knock-done") knockDone(msg.id);
     };
     // Closed for good (the server said no): rejoin, which also tells us if it ended.
     es.onerror = () => {
@@ -161,6 +210,116 @@
       if (code) join(code, { quiet: true }).then(() => { if (!session || !events) finish("The party has ended."); });
     };
   }
+
+  // ---------- Waiting to be let in ----------
+  let waitTimer = null;
+  function waitFor(code, hostName) {
+    const name = hostName || "the host";
+    const text = $("partyWaitText");
+    const again = $("partyWaitAgain");
+    const settle = (message) => {
+      clearTimeout(waitTimer);
+      text.textContent = message;
+      again.hidden = false;
+    };
+    $("partyWaitTitle").textContent = "Asking to join…";
+    text.textContent = `Waiting for ${name} to let you in. This screen updates by itself.`;
+    again.hidden = true;
+    again.onclick = () => join(code, { hostName });
+    if (!$("partyWait").open) $("partyWait").showModal();
+    const poll = async () => {
+      if (!$("partyWait").open) return;
+      const { status } = await f.api(`/api/party/${code}/request`).catch(() => ({ status: "waiting" }));
+      if (status === "waiting") return (waitTimer = setTimeout(poll, 2000));
+      if (status === "allowed") {
+        $("partyWait").close();
+        return join(code, { hostName });
+      }
+      if (status === "denied") return settle(`${name} didn't let you in.`);
+      if (status === "expired") return settle(`${name} didn't answer.`);
+      again.hidden = true;
+      clearTimeout(waitTimer);
+      text.textContent = status === "removed" ? `${name} removed you from this party.` : "That party has ended.";
+    };
+    clearTimeout(waitTimer);
+    waitTimer = setTimeout(poll, 2000);
+  }
+  $("partyWait").addEventListener("close", () => clearTimeout(waitTimer));
+
+  // ---------- Letting people in (host) ----------
+  // Requests queue up; each is answered once, from whichever screen.
+  let knocks = [];
+  function knocked(request) {
+    if (knocks.some((k) => k.id === request.id)) return;
+    knocks.push(request);
+    chime();
+    showKnock();
+  }
+  function knockDone(id) {
+    const showing = knocks[0] && knocks[0].id === id && $("partyKnock").open;
+    knocks = knocks.filter((k) => k.id !== id);
+    if (showing) {
+      $("partyKnock").close();
+      showKnock();
+    }
+  }
+  function showKnock() {
+    const k = knocks[0];
+    if (!k || $("partyKnock").open) return;
+    $("partyKnockWho").replaceChildren(dot(k));
+    $("partyKnockTitle").textContent = `${k.name} wants to join`;
+    $("partyKnockNote").textContent = k.guest ? "They're joining as a guest, without a Frunk account." : "They have a Frunk account.";
+    const answer = (allow) => async () => {
+      knocks = knocks.filter((x) => x !== k);
+      $("partyKnock").close();
+      await f.api(`/api/party/${session.code}/answer`, { method: "POST", body: JSON.stringify({ member: session.member, request: k.id, allow }) }).catch((err) => f.toast(err.message, 4000));
+      showKnock();
+    };
+    $("partyKnockAllow").onclick = answer(true);
+    $("partyKnockDeny").onclick = answer(false);
+    $("partyKnock").showModal();
+  }
+
+  // ---------- Joining without an account ----------
+  // A party link or code opened signed out: a name, and in as a guest of that
+  // one party (if the host allows guests, maybe after asking).
+  async function guestFlow(code) {
+    if (needsFullscreen()) return viaFullscreen(`party=${encodeURIComponent(code)}`);
+    let info;
+    try {
+      info = await f.api(`/api/party/${encodeURIComponent(code)}/info`);
+    } catch (err) {
+      return f.toast(err.message, 5000);
+    }
+    const form = $("partyGuestForm");
+    $("partyGuestTitle").textContent = `Join ${info.host}'s Watch Party`;
+    const closed = info.guests === "no";
+    $("partyGuestNote").textContent = closed
+      ? "This party is only for people with a Frunk account. Sign in to join."
+      : info.guests === "ask" ? `Pick a name. ${info.host} will be asked to let you in.` : "Pick a name for the others to see.";
+    $("partyGuestName").hidden = closed;
+    $("partyGuestJoin").hidden = closed;
+    form.name.value = store.lget("frunk-guest-name") || "";
+    $("partyGuestSignIn").onclick = () => {
+      $("partyGuest").close();
+      store.set("frunk-party-pending", info.code);
+      f.openSignIn("", "Sign in to join the Watch Party.");
+    };
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      f.pressed($("partyGuestJoin"), async () => {
+        const name = form.name.value.trim();
+        const r = await f.api(`/api/party/${info.code}/guest`, { method: "POST", body: JSON.stringify({ name }) });
+        store.lset("frunk-guest-name", name);
+        guestName = name;
+        $("partyGuest").close();
+        if (r.waiting) waitFor(info.code, info.host);
+        else await enter(r);
+      });
+    };
+    $("partyGuest").showModal();
+  }
+  let guestName = null;
 
   // Back to the home screen as it was.
   function finish(message) {
@@ -173,11 +332,13 @@
     closeChat();
     unread = 0;
     showUnread();
+    $("partyNotice").hidden = true;
     $("partyChatList").replaceChildren();
     $("partyFloats").replaceChildren();
     view.hidden = true;
     document.body.classList.remove("in-party");
-    for (const id of ["partyPicker", "partySettings", "partyInvite"]) if ($(id).open) $(id).close();
+    for (const id of ["partyPicker", "partySettings", "partyInvite", "partyKnock"]) if ($(id).open) $(id).close();
+    knocks = [];
     f.render();
     renderBar();
     if (message) f.toast(message, 4000);
@@ -453,7 +614,9 @@
     head.className = "party-msg-head";
     const when = document.createElement("time");
     when.textContent = timeFmt.format(new Date(m.at));
-    head.append(dot(m), m.name, when);
+    head.append(dot(m), m.name);
+    if (m.guest) head.append(Object.assign(document.createElement("span"), { className: "party-tag", textContent: "guest" }));
+    head.append(when);
     el.append(head, richText(document.createElement("p"), m.text));
     return el;
   }
@@ -467,17 +630,69 @@
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
     list.append(messageEl(m));
     if (atBottom) scrollChat();
-    if (!$("partyChat").hidden || (me && m.name === (me.name || me.email))) return;
+    const mine = m.name === (me ? me.name || me.email : guestName);
+    if (mine || (!$("partyChat").hidden && !view.classList.contains("mini"))) return;
     unread++;
     showUnread();
-    bubble(m);
+    chime();
+    if (view.classList.contains("mini")) notice(m);
+    else bubble(m);
   }
   function showUnread() {
     for (const id of ["partyUnread", "partyMiniUnread"]) {
       $(id).hidden = !unread;
       $(id).textContent = unread > 9 ? "9+" : unread;
     }
+    document.title = unread ? `(${unread}) Frunk` : "Frunk";
   }
+
+  // On the home screen (party minimized): a banner at the top; tap for the chat.
+  let noticeTimer = null;
+  function notice(m) {
+    const el = $("partyNotice");
+    el.replaceChildren(dot(m), Object.assign(document.createElement("b"), { textContent: m.name }), richText(document.createElement("span"), m.text));
+    el.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => (el.hidden = true), 6000);
+  }
+  $("partyNotice").onclick = () => {
+    $("partyNotice").hidden = true;
+    show(true);
+    openChat();
+  };
+
+  // A soft two-note chime for new messages and people asking to join, unless muted.
+  let chimeCtx = null;
+  let muted = store.lget("frunk-chat-muted") === true;
+  function chime() {
+    if (muted) return;
+    try {
+      chimeCtx ||= new AudioContext();
+      const t = chimeCtx.currentTime;
+      for (const [freq, at] of [[880, 0], [1320, 0.12]]) {
+        const osc = chimeCtx.createOscillator();
+        const gain = chimeCtx.createGain();
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t + at);
+        gain.gain.exponentialRampToValueAtTime(0.12, t + at + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.25);
+        osc.connect(gain).connect(chimeCtx.destination);
+        osc.start(t + at);
+        osc.stop(t + at + 0.3);
+      }
+    } catch {}
+  }
+  function showMute() {
+    $("partyMute").classList.toggle("off", muted);
+    $("partyMute").setAttribute("aria-label", muted ? "Turn chat sound on" : "Turn chat sound off");
+  }
+  $("partyMute").onclick = () => {
+    muted = !muted;
+    store.lset("frunk-chat-muted", muted);
+    showMute();
+    if (!muted) chime();
+  };
+  showMute();
 
   // A message over the video while the chat is closed, gone after a few seconds.
   function bubble(m) {
@@ -507,6 +722,7 @@
   }
 
   function openChat() {
+    $("partyNotice").hidden = true;
     $("partyChat").hidden = false;
     view.classList.add("chatting");
     unread = 0;
@@ -762,22 +978,37 @@
     $("appsDialog").showModal();
   };
 
-  // ---------- Who can control (host) ----------
+  // ---------- Party settings (host) ----------
+  // Who can join and control, and the people here: make co-pilot, remove.
   function renderSettings() {
-    for (const b of document.querySelectorAll("#partyModes [data-mode]")) b.classList.toggle("on", b.dataset.mode === party.mode);
-    const box = $("partyCopilots");
-    box.hidden = party.mode !== "copilots";
-    const guests = party.people.filter((p) => !p.host);
-    box.replaceChildren(...(guests.length ? guests.map((p) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = `pill party-row${p.copilot ? " on" : ""}`;
-      b.append(dot(p), p.name, Object.assign(document.createElement("span"), { className: "party-tag", textContent: p.copilot ? "Co-pilot" : "Tap to make co-pilot" }));
-      b.onclick = () => {
-        const ids = guests.filter((g) => (g === p ? !g.copilot : g.copilot)).map((g) => g.id);
-        saveSettings({ copilots: ids });
-      };
-      return b;
+    renderChoices($("partySettingsChoices"), { ...party.access, mode: party.mode }, (key, value) =>
+      saveSettings(key === "mode" ? { mode: value } : { access: { [key]: value } }));
+    const others = party.people.filter((p) => !p.host);
+    $("partyPeopleList").replaceChildren(...(others.length ? others.map((p) => {
+      const row = document.createElement("div");
+      row.className = "party-person";
+      const name = document.createElement("span");
+      name.className = "party-person-name";
+      name.append(dot(p), p.name);
+      if (p.guest) name.append(Object.assign(document.createElement("span"), { className: "party-tag", textContent: "guest" }));
+      row.append(name);
+      if (party.mode === "copilots" && !p.guest) {
+        const co = document.createElement("button");
+        co.type = "button";
+        co.className = `pill small${p.copilot ? " on" : ""}`;
+        co.textContent = p.copilot ? "Co-pilot ✓" : "Make co-pilot";
+        co.onclick = () => saveSettings({ copilots: others.filter((g) => (g === p ? !g.copilot : g.copilot)).map((g) => g.id) });
+        row.append(co);
+      }
+      const out = document.createElement("button");
+      out.type = "button";
+      out.className = "pill small danger";
+      out.textContent = "Remove";
+      out.onclick = () => ask(`Remove ${p.name}?`, "They leave the party and can't come back to it.", "Remove", async () => {
+        await f.api(`/api/party/${session.code}/remove`, { method: "POST", body: JSON.stringify({ member: session.member, person: p.id }) }).catch((err) => f.toast(err.message, 4000));
+      });
+      row.append(out);
+      return row;
     }) : [Object.assign(document.createElement("p"), { className: "hint", textContent: "Nobody else has joined yet." })]));
   }
   async function saveSettings(body) {
@@ -787,7 +1018,6 @@
       f.toast(err.message, 4000);
     }
   }
-  for (const b of document.querySelectorAll("#partyModes [data-mode]")) b.onclick = () => saveSettings({ mode: b.dataset.mode });
   $("partySettingsBtn").onclick = () => {
     renderSettings();
     $("partySettings").showModal();
@@ -818,7 +1048,8 @@
     const code = $("partyCodeForm").code.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (code.length !== 4) return;
     $("partyCodeDialog").close();
-    joinFlow(code);
+    if (me) joinFlow(code);
+    else guestFlow(code);
   };
 
   // ---------- A small confirm sheet ----------
@@ -864,12 +1095,20 @@
     async start(user) {
       me = user;
       if (!me) {
-        // A party link opened signed out: remember it through sign-in.
+        // Signed out: a party link or /join means joining as a guest; a reload
+        // or the fullscreen trip rejoins with the guest pass this browser has.
         const code = f.params.get("party");
-        if (code) {
-          store.set("frunk-party-pending", code);
+        const saved = store.get("frunk-party");
+        guestName = store.lget("frunk-guest-name");
+        if (location.pathname === "/join") {
           history.replaceState(null, "", "/");
-          f.openSignIn("", "Sign in to join the Watch Party.");
+          $("partyCodeForm").reset();
+          $("partyCodeDialog").showModal();
+        } else if (code) {
+          history.replaceState(null, "", "/");
+          guestFlow(code);
+        } else if (saved) {
+          join(saved.code, { quiet: true });
         }
         return;
       }

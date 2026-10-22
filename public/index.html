@@ -95,6 +95,10 @@
     <aside class="party-chat" id="partyChat" hidden>
       <div class="party-chat-head">
         <h3>Chat</h3>
+        <button class="icon-btn party-mute" id="partyMute" aria-label="Turn chat sound off">
+          <svg class="i-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></svg>
+          <svg class="i-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 9.5-4.9M18 11v5l2 2H8M10 21h4M3 3l18 18"/></svg>
+        </button>
         <button class="icon-btn" id="partyChatClose" aria-label="Close chat">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
@@ -366,17 +370,70 @@
     </form>
   </dialog>
 
-  <!-- Watch Party: who can control playback (host) -->
+  <!-- Watch Party: starting one (host) -->
+  <dialog class="sheet narrow" id="partySetup">
+    <form method="dialog">
+      <h2 tabindex="-1" autofocus>Start a Watch Party</h2>
+      <div id="partySetupChoices"></div>
+      <p class="hint">You can change these any time from the party's settings.</p>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" data-close>Cancel</button>
+        <button type="button" class="pill accent" id="partySetupStart">Start</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Watch Party: settings (host) -->
   <dialog class="sheet narrow" id="partySettings">
     <form method="dialog">
-      <h2>Who can control</h2>
-      <div class="menu" id="partyModes">
-        <button type="button" class="pill party-row" data-mode="host">Only me</button>
-        <button type="button" class="pill party-row" data-mode="everyone">Everyone can play, pause and skip</button>
-        <button type="button" class="pill party-row" data-mode="copilots">Co-pilots I pick (they can also choose what plays)</button>
-      </div>
-      <div class="menu party-copilots" id="partyCopilots" hidden></div>
+      <h2 tabindex="-1" autofocus>Party settings</h2>
+      <div id="partySettingsChoices"></div>
+      <div class="field-label">People</div>
+      <div class="party-people-list" id="partyPeopleList"></div>
       <div class="sheet-actions"><span class="spacer"></span><button type="submit" class="pill">Done</button></div>
+    </form>
+  </dialog>
+
+  <!-- Watch Party: someone asking to join (host) -->
+  <dialog class="sheet narrow" id="partyKnock">
+    <form method="dialog">
+      <div class="party-knock-who" id="partyKnockWho"></div>
+      <h2 id="partyKnockTitle"></h2>
+      <p class="hint" id="partyKnockNote"></p>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" id="partyKnockDeny">Deny</button>
+        <button type="button" class="pill accent" id="partyKnockAllow">Allow</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Watch Party: waiting to be let in -->
+  <dialog class="sheet narrow" id="partyWait">
+    <form method="dialog">
+      <h2 id="partyWaitTitle">Asking to join…</h2>
+      <p class="hint" id="partyWaitText"></p>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" data-close>Cancel</button>
+        <button type="button" class="pill accent" id="partyWaitAgain" hidden>Ask again</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Watch Party: joining without an account -->
+  <dialog class="sheet narrow" id="partyGuest">
+    <form method="dialog" id="partyGuestForm">
+      <h2 id="partyGuestTitle">Join the Watch Party</h2>
+      <p class="hint" id="partyGuestNote"></p>
+      <label id="partyGuestName">Your name<input name="name" maxlength="30" autocomplete="given-name"></label>
+      <div class="sheet-actions">
+        <button type="button" class="pill text-btn" id="partyGuestSignIn">Sign in instead</button>
+        <span class="spacer"></span>
+        <button type="button" class="pill" data-close>Cancel</button>
+        <button type="submit" class="pill accent" id="partyGuestJoin">Join</button>
+      </div>
     </form>
   </dialog>
 
@@ -421,6 +478,7 @@
     </form>
   </dialog>
 
+  <button class="party-notice" id="partyNotice" hidden aria-label="Open the party chat"></button>
   <div class="toast" id="toast" popover="manual" role="status"></div>
 
   <script src="/app.js?v=__V__"></script>

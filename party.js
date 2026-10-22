@@ -15,6 +15,12 @@ const CHAT_KEEP = 100; // messages a newcomer (or a reload) gets to scroll back 
 const CHAT_MAX_CHARS = 500;
 const CHAT_BURST = { count: 8, ms: 10_000 }; // per person, messages and reactions each
 const REACTIONS = ["😂", "😮", "❤️", "👏", "🔥", "😢"];
+const KNOCK_MS = 2 * 60_000; // an unanswered request to join lapses after this
+// Who gets in: people with a Frunk account join right away or ask; people
+// without one can't, ask, or join right away (as a guest of this one party).
+const ACCESS = { accounts: ["open", "ask"], guests: ["no", "ask", "open"] };
+const DEFAULT_ACCESS = { accounts: "open", guests: "ask" };
+const GUEST_NAME_MAX = 30;
 
 // The apps a host plays from, given by the server:
 //   sourcesFor(userId): [{ id, name, hosts: [tile hostnames] }] that person can host from
@@ -25,6 +31,9 @@ const REACTIONS = ["😂", "😮", "❤️", "👏", "🔥", "😢"];
 //     host's key, which never leaves the server (apps.js createStream)
 //   art(userId, sourceId, itemId): a fetch Response with the item's cover
 // person(userId): { name, color } or null once the account is gone.
+//
+// Everyone in a party is an "identity": a Frunk account's id, or a guest's
+// ("g_…") that only exists inside that party.
 function createParties({ sourcesFor, browse, start, art, person }) {
   const parties = new Map(); // code -> party
   const lobby = new Set(); // { res, userId }: pages showing who's hosting
@@ -44,6 +53,19 @@ function createParties({ sourcesFor, browse, start, art, person }) {
     });
   }
 
+  const isGuest = (id) => String(id).startsWith("g_");
+  function who(p, id) {
+    if (isGuest(id)) return { name: p.guests.get(id)?.name || "Guest", color: null, guest: true };
+    return person(id) || { name: "Someone", color: null };
+  }
+  // In without asking: the host, anyone already let in, or the party is open to them.
+  const admitted = (p, id) => !p.removed.has(id) &&
+    (id === p.hostId || p.allowed.has(id) || (isGuest(id) ? p.access.guests === "open" : p.access.accounts === "open"));
+  function validAccess(access, base = DEFAULT_ACCESS) {
+    const next = { ...base, ...(access || {}) };
+    return ACCESS.accounts.includes(next.accounts) && ACCESS.guests.includes(next.guests) ? { accounts: next.accounts, guests: next.guests } : null;
+  }
+
   const positionOf = (p, at = Date.now()) => (p.playing ? p.position + (at - p.at) / 1000 : p.position);
   const hostHere = (p) => [...p.members.values()].some((m) => m.userId === p.hostId);
   const copilotHere = (p) => [...p.members.values()].some((m) => p.copilots.has(m.userId));
@@ -55,16 +77,16 @@ function createParties({ sourcesFor, browse, start, art, person }) {
     if (p.mode === "copilots" && p.copilots.has(userId)) return true;
     return !hostHere(p) && !copilotHere(p);
   }
-  // Choosing what plays: the host and co-pilots.
-  const canChoose = (p, userId) => userId === p.hostId || (p.mode === "copilots" && p.copilots.has(userId));
+  // Choosing what plays: the host and co-pilots (never guests).
+  const canChoose = (p, userId) => userId === p.hostId || (p.mode === "copilots" && p.copilots.has(userId) && !isGuest(userId));
 
   // One entry per person, even with the party open on two of their screens.
   function people(p) {
     const seen = new Map();
     for (const [id, m] of p.members) {
       if (seen.has(m.userId)) continue;
-      const who = person(m.userId) || { name: "Someone", color: null };
-      seen.set(m.userId, { id, name: who.name, color: who.color, host: m.userId === p.hostId, copilot: p.copilots.has(m.userId) });
+      const w = who(p, m.userId);
+      seen.set(m.userId, { id, name: w.name, color: w.color, guest: !!w.guest, host: m.userId === p.hostId, copilot: p.copilots.has(m.userId) });
     }
     return [...seen.values()];
   }
@@ -75,9 +97,10 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       code: p.code,
       host: { name: host.name, color: host.color, away: !hostHere(p) },
       mode: p.mode,
+      access: p.access,
       people: people(p),
       state: { media: p.media, playing: p.playing, position: p.position, at: p.at },
-      you: { host: userId === p.hostId, control: canControl(p, userId), choose: canChoose(p, userId) },
+      you: { host: userId === p.hostId, guest: isGuest(userId), control: canControl(p, userId), choose: canChoose(p, userId) },
     };
   }
 
@@ -97,6 +120,12 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       return { code: p.code, host: { name: host.name, color: host.color }, title: p.media ? p.media.title : null, people: people(p).length, mine: p.hostId === userId };
     });
   }
+  // To the host's open pages: someone asking to join, or that being settled.
+  function toHost(p, msg) {
+    for (const m of p.members.values()) if (m.userId === p.hostId) for (const res of m.streams) send(res, msg);
+  }
+  const knock = (r) => ({ id: r.id, name: r.name, guest: r.guest });
+
   function lobbyUpdate() {
     for (const l of lobby) send(l.res, { type: "lobby", parties: lobbyList(l.userId) });
   }
@@ -137,6 +166,12 @@ function createParties({ sourcesFor, browse, start, art, person }) {
           changed = true;
         }
       }
+      for (const r of p.requests.values()) {
+        if (r.status === "waiting" && now - r.at > KNOCK_MS) {
+          r.status = "expired";
+          toHost(p, { type: "knock-done", id: r.id });
+        }
+      }
       if (hostHere(p)) p.hostLeftAt = null;
       else p.hostLeftAt ||= now;
       if (now - p.created > MAX_AGE_MS || (p.hostLeftAt && now - p.hostLeftAt > HOST_GONE_MS) || !person(p.hostId)) end(p, null);
@@ -146,7 +181,7 @@ function createParties({ sourcesFor, browse, start, art, person }) {
   sweeper.unref();
 
   return {
-    canHost: (userId) => sourcesFor(userId).length > 0,
+    canHost: (userId) => !isGuest(userId) && sourcesFor(userId).length > 0,
     sourcesFor,
     lobbyList,
 
@@ -158,14 +193,21 @@ function createParties({ sourcesFor, browse, start, art, person }) {
     },
 
     // One party per host: hosting again returns the one already running.
-    create(userId) {
+    // { mode, access }: the host's choices from the setup sheet.
+    create(userId, { mode = "host", access } = {}) {
       for (const p of parties.values()) if (p.hostId === userId) return p.code;
+      if (!MODES.includes(mode)) mode = "host";
       let code;
       do code = Array.from(crypto.randomBytes(4), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
       while (parties.has(code));
       parties.set(code, {
         code, hostId: userId, created: Date.now(), hostLeftAt: null,
-        mode: "host", copilots: new Set(),
+        mode, copilots: new Set(), access: validAccess(access) || { ...DEFAULT_ACCESS },
+        allowed: new Set(), // identities let in, who come and go without asking again
+        removed: new Set(), // identities the host removed; they can't come back
+        requests: new Map(), // identity -> { id, name, guest, at, status: waiting | allowed | denied | expired }
+        guests: new Map(), // guest identity -> { name }
+        guestTokens: new Map(), // a guest's cookie -> their identity
         media: null, playing: false, position: 0, at: Date.now(),
         stream: null, // what's playing, server side (apps.js createStream)
         loads: 0, // so only the latest of overlapping choices wins
@@ -178,18 +220,97 @@ function createParties({ sourcesFor, browse, start, art, person }) {
     },
 
     // memberId: this page's earlier membership (kept across a reload), if any.
+    // { member, party } once in; { waiting: true } while the host decides;
+    // { error } when they can't come in; null when there's no such party.
     join(code, userId, memberId) {
       const p = find(code);
       if (!p) return null;
+      if (p.removed.has(userId)) return { error: `${who(p, p.hostId).name} removed you from this party.` };
+      if (!admitted(p, userId)) {
+        if (isGuest(userId) && p.access.guests === "no") return { error: "This party is only for people with a Frunk account." };
+        let r = p.requests.get(userId);
+        if (!r || r.status !== "waiting") {
+          r = { id: userId, name: who(p, userId).name, guest: isGuest(userId), at: Date.now(), status: "waiting" };
+          p.requests.set(userId, r);
+          toHost(p, { type: "knock", request: knock(r) });
+        }
+        return { waiting: true };
+      }
+      p.allowed.add(userId);
       let id = memberOf(p, memberId, userId) ? memberId : null;
       if (!id) {
         // A second screen of someone already here isn't news.
         const arriving = ![...p.members.values()].some((m) => m.userId === userId);
         id = crypto.randomBytes(12).toString("base64url");
         p.members.set(id, { userId, streams: new Set(), lastSeen: Date.now() });
-        broadcast(p, arriving ? { kind: "joined", by: (person(userId) || {}).name } : null);
+        broadcast(p, arriving ? { kind: "joined", by: who(p, userId).name } : null);
       }
       return { member: id, party: snapshot(p, userId) };
+    },
+
+    // Where someone asking to join stands: waiting, allowed, denied, expired, or
+    // removed; "ended" when the party is gone.
+    requestStatus(code, userId) {
+      const p = find(code);
+      if (!p) return "ended";
+      if (p.removed.has(userId)) return "removed";
+      if (admitted(p, userId)) return "allowed";
+      return p.requests.get(userId)?.status || "expired";
+    },
+    // Host only: { request: identity, allow }.
+    answer(code, memberId, userId, { request, allow } = {}) {
+      const p = find(code);
+      if (!memberOf(p, memberId, userId)) return "You're not in that party.";
+      if (userId !== p.hostId) return "Only the host can let people in.";
+      const r = p.requests.get(request);
+      if (!r || r.status !== "waiting") return "That request has already been answered.";
+      r.status = allow ? "allowed" : "denied";
+      if (allow) p.allowed.add(r.id);
+      toHost(p, { type: "knock-done", id: r.id });
+      return null;
+    },
+
+    // Someone without a Frunk account: an identity for this party only, and the
+    // token their browser keeps to prove it. { error } when guests can't come.
+    addGuest(code, name) {
+      const p = find(code);
+      if (!p) return null;
+      if (p.access.guests === "no") return { error: "This party is only for people with a Frunk account." };
+      name = String(name || "").trim().replace(/\s+/g, " ").slice(0, GUEST_NAME_MAX);
+      if (!name) return { error: "Type your name first." };
+      const id = `g_${crypto.randomBytes(9).toString("base64url")}`;
+      const token = crypto.randomBytes(24).toString("base64url");
+      p.guests.set(id, { name });
+      p.guestTokens.set(token, id);
+      return { id, token };
+    },
+    guestId: (code, token) => (token && find(code)?.guestTokens.get(token)) || null,
+    // For the join screen of someone signed out: whose party, and can guests come.
+    info(code) {
+      const p = find(code);
+      return p && { code: p.code, host: who(p, p.hostId).name, guests: p.access.guests };
+    },
+
+    // Host only: remove someone (a member id of theirs); they can't come back.
+    remove(code, memberId, userId, { person: target } = {}) {
+      const p = find(code);
+      if (!memberOf(p, memberId, userId)) return "You're not in that party.";
+      if (userId !== p.hostId) return "Only the host can remove people.";
+      const gone = p.members.get(target)?.userId;
+      if (!gone || gone === p.hostId) return "They're not in the party.";
+      p.removed.add(gone);
+      p.allowed.delete(gone);
+      p.copilots.delete(gone);
+      for (const [id, m] of p.members) {
+        if (m.userId !== gone) continue;
+        for (const res of m.streams) {
+          send(res, { type: "removed", by: who(p, p.hostId).name });
+          res.end();
+        }
+        p.members.delete(id);
+      }
+      broadcast(p, { kind: "removed", by: who(p, gone).name });
+      return null;
     },
 
     stream(code, memberId, userId, req, res) {
@@ -204,7 +325,10 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       m.lastSeen = Date.now();
       send(res, { type: "party", party: snapshot(p, userId), event: null });
       send(res, { type: "chat-history", messages: p.chat });
-      if (m.userId === p.hostId) broadcast(p); // the host is back
+      if (m.userId === p.hostId) {
+        for (const r of p.requests.values()) if (r.status === "waiting") send(res, { type: "knock", request: knock(r) });
+        broadcast(p); // the host is back
+      }
       return true;
     },
 
@@ -214,7 +338,7 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       const p = find(code);
       if (!memberOf(p, memberId, userId)) return "You're not in that party.";
       const now = Date.now();
-      const by = (person(userId) || {}).name;
+      const by = who(p, userId).name;
       if (action === "load") {
         if (!canChoose(p, userId)) return "Only the host can choose what plays.";
         const source = sourcesFor(p.hostId).find((s) => s.id === (media && media.source));
@@ -253,8 +377,8 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       return null;
     },
 
-    // Host only: { mode, copilots: [member ids] }.
-    settings(code, memberId, userId, { mode, copilots } = {}) {
+    // Host only: { mode, access, copilots: [member ids] }.
+    settings(code, memberId, userId, { mode, access, copilots } = {}) {
       const p = find(code);
       if (!memberOf(p, memberId, userId)) return "You're not in that party.";
       if (userId !== p.hostId) return "Only the host can change that.";
@@ -262,8 +386,13 @@ function createParties({ sourcesFor, browse, start, art, person }) {
         if (!MODES.includes(mode)) return "Unknown mode.";
         p.mode = mode;
       }
+      if (access !== undefined) {
+        const next = validAccess(access, p.access);
+        if (!next) return "Unknown setting.";
+        p.access = next;
+      }
       if (Array.isArray(copilots)) {
-        p.copilots = new Set(copilots.map((id) => p.members.get(id)).filter(Boolean).map((m) => m.userId));
+        p.copilots = new Set(copilots.map((id) => p.members.get(id)).filter(Boolean).map((m) => m.userId).filter((id) => !isGuest(id)));
         p.copilots.delete(p.hostId);
       }
       broadcast(p);
@@ -275,14 +404,14 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       if (!memberOf(p, memberId, userId)) return;
       for (const res of p.members.get(memberId).streams) res.end();
       p.members.delete(memberId);
-      broadcast(p, { kind: "left", by: (person(userId) || {}).name });
+      broadcast(p, { kind: "left", by: who(p, userId).name });
     },
 
     end(code, userId) {
       const p = find(code);
       if (!p) return "That party has ended.";
       if (p.hostId !== userId) return "Only the host can end the party.";
-      end(p, (person(userId) || {}).name);
+      end(p, who(p, userId).name);
       return null;
     },
 
@@ -296,16 +425,16 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       const key = `${userId} ${kind}`;
       const recent = (p.sent.get(key) || []).filter((t) => now - t < CHAT_BURST.ms);
       if (recent.length >= CHAT_BURST.count) return "Slow down a little.";
-      const who = person(userId) || { name: "Someone", color: null };
+      const w = who(p, userId);
       let msg;
       if (kind === "react") {
         if (!REACTIONS.includes(reaction)) return "Unknown reaction.";
-        msg = { type: "react", reaction, name: who.name, color: who.color };
+        msg = { type: "react", reaction, name: w.name, color: w.color };
       } else {
         text = String(text || "").trim();
         if (!text) return "Type a message first.";
         if (text.length > CHAT_MAX_CHARS) return `Keep it under ${CHAT_MAX_CHARS} characters.`;
-        const message = { id: crypto.randomBytes(6).toString("base64url"), at: now, name: who.name, color: who.color, text };
+        const message = { id: crypto.randomBytes(6).toString("base64url"), at: now, name: w.name, color: w.color, guest: !!w.guest, text };
         p.chat.push(message);
         if (p.chat.length > CHAT_KEEP) p.chat.shift();
         msg = { type: "chat", message };
