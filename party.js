@@ -21,6 +21,11 @@ const KNOCK_MS = 2 * 60_000; // an unanswered request to join lapses after this
 const ACCESS = { accounts: ["open", "ask"], guests: ["no", "ask", "open"] };
 const DEFAULT_ACCESS = { accounts: "open", guests: "ask" };
 const GUEST_NAME_MAX = 30;
+// Push-to-talk: who may hold the button. "pilots" is the host and co-pilots.
+const TALK = ["everyone", "accounts", "pilots", "nobody"];
+const DEFAULT_TALK = "accounts";
+const TALK_MAX_MS = 30_000; // one turn; the button has to be pressed again after
+const TALK_CHUNK_MAX = 16_000; // base64 chars per chunk: 200 ms of 16 kHz μ-law is about 4,300
 
 // The apps a host plays from, given by the server:
 //   sourcesFor(userId): [{ id, name, hosts: [tile hostnames] }] that person can host from
@@ -81,6 +86,13 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
   }
   // Choosing what plays: the host and co-pilots (never guests).
   const canChoose = (p, userId) => userId === p.hostId || (p.mode === "copilots" && p.copilots.has(userId) && !isGuest(userId));
+  // Push-to-talk. Everyone always hears; this is who may speak.
+  function canTalk(p, userId) {
+    if (p.talk === "nobody") return false;
+    if (p.talk === "pilots") return userId === p.hostId || (p.mode === "copilots" && p.copilots.has(userId));
+    if (p.talk === "accounts") return !isGuest(userId);
+    return true;
+  }
 
   // One entry per person, even with the party open on two of their screens.
   function people(p) {
@@ -100,9 +112,11 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       host: { name: host.name, color: host.color, away: !hostHere(p) },
       mode: p.mode,
       access: p.access,
+      talk: p.talk,
+      talking: p.floor && { member: p.floor.memberId, name: p.floor.name, color: p.floor.color },
       people: people(p),
       state: { media: p.media, playing: p.playing, position: p.position, at: p.at },
-      you: { host: userId === p.hostId, guest: isGuest(userId), control: canControl(p, userId), choose: canChoose(p, userId) },
+      you: { host: userId === p.hostId, guest: isGuest(userId), control: canControl(p, userId), choose: canChoose(p, userId), talk: canTalk(p, userId) },
     };
   }
 
@@ -121,6 +135,18 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       const host = person(p.hostId) || { name: "Someone", color: null };
       return { code: p.code, host: { name: host.name, color: host.color }, title: p.media ? p.media.title : null, people: people(p).length, mine: p.hostId === userId };
     });
+  }
+  // To every open page in the party, except (optionally) one person's own.
+  function toAll(p, msg, exceptUser) {
+    for (const m of p.members.values()) if (m.userId !== exceptUser) for (const res of m.streams) send(res, msg);
+  }
+  // The talk button let go, timed out, or the talker gone or no longer allowed.
+  function releaseFloor(p) {
+    if (!p.floor) return;
+    clearTimeout(p.floor.timer);
+    const member = p.floor.memberId;
+    p.floor = null;
+    toAll(p, { type: "talk-end", member });
   }
   // To the host's open pages: someone asking to join, or that being settled.
   function toHost(p, msg) {
@@ -149,6 +175,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
   function end(p, by) {
     parties.delete(p.code);
     stopStream(p);
+    if (p.floor) clearTimeout(p.floor.timer);
     for (const m of p.members.values()) {
       for (const res of m.streams) {
         send(res, { type: "ended", by });
@@ -165,6 +192,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       for (const [id, m] of p.members) {
         if (!m.streams.size && now - m.lastSeen > MEMBER_GONE_MS) {
           p.members.delete(id);
+          if (p.floor && p.floor.memberId === id) releaseFloor(p);
           changed = true;
         }
       }
@@ -195,16 +223,18 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
     },
 
     // One party per host: hosting again returns the one already running.
-    // { mode, access }: the host's choices from the setup sheet.
-    create(userId, { mode = "host", access } = {}) {
+    // { mode, access, talk }: the host's choices from the setup sheet.
+    create(userId, { mode = "host", access, talk = DEFAULT_TALK } = {}) {
       for (const p of parties.values()) if (p.hostId === userId) return p.code;
       if (!MODES.includes(mode)) mode = "host";
+      if (!TALK.includes(talk)) talk = DEFAULT_TALK;
       let code;
       do code = Array.from(crypto.randomBytes(4), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
       while (parties.has(code));
       parties.set(code, {
         code, hostId: userId, created: Date.now(), hostLeftAt: null,
         mode, copilots: new Set(), access: validAccess(access) || { ...DEFAULT_ACCESS },
+        talk, floor: null, // floor: who's holding the talk button { memberId, userId, name, color, timer }
         allowed: new Set(), // identities let in, who come and go without asking again
         removed: new Set(), // identities the host removed; they can't come back
         requests: new Map(), // identity -> { id, name, guest, at, status: waiting | allowed | denied | expired }
@@ -303,6 +333,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       p.removed.add(gone);
       p.allowed.delete(gone);
       p.copilots.delete(gone);
+      if (p.floor && p.floor.userId === gone) releaseFloor(p);
       for (const [id, m] of p.members) {
         if (m.userId !== gone) continue;
         for (const res of m.streams) {
@@ -380,8 +411,8 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       return null;
     },
 
-    // Host only: { mode, access, copilots: [member ids] }.
-    settings(code, memberId, userId, { mode, access, copilots } = {}) {
+    // Host only: { mode, access, talk, copilots: [member ids] }.
+    settings(code, memberId, userId, { mode, access, talk, copilots } = {}) {
       const p = find(code);
       if (!memberOf(p, memberId, userId)) return "You're not in that party.";
       if (userId !== p.hostId) return "Only the host can change that.";
@@ -394,10 +425,15 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
         if (!next) return "Unknown setting.";
         p.access = next;
       }
+      if (talk !== undefined) {
+        if (!TALK.includes(talk)) return "Unknown setting.";
+        p.talk = talk;
+      }
       if (Array.isArray(copilots)) {
         p.copilots = new Set(copilots.map((id) => p.members.get(id)).filter(Boolean).map((m) => m.userId).filter((id) => !isGuest(id)));
         p.copilots.delete(p.hostId);
       }
+      if (p.floor && !canTalk(p, p.floor.userId)) releaseFloor(p);
       broadcast(p);
       return null;
     },
@@ -407,6 +443,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       if (!memberOf(p, memberId, userId)) return;
       for (const res of p.members.get(memberId).streams) res.end();
       p.members.delete(memberId);
+      if (p.floor && p.floor.memberId === memberId) releaseFloor(p);
       broadcast(p, { kind: "left", by: who(p, userId).name });
     },
 
@@ -446,6 +483,37 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       p.sent.set(key, [...recent, now]);
       for (const m of p.members.values()) for (const res of m.streams) send(res, msg);
       return null;
+    },
+
+    // Push-to-talk, a walkie-talkie: { action: "start" } takes the floor (one
+    // talker at a time, TALK_MAX_MS at most), { action: "audio", seq, data }
+    // sends a chunk (base64 16 kHz μ-law) to everyone else, { action: "end" }
+    // lets go. Everyone's screens show who's talking; the talker's own screens
+    // don't play their voice back. Returns an error message, or null.
+    talk(code, memberId, userId, { action, seq, data } = {}) {
+      const p = find(code);
+      if (!memberOf(p, memberId, userId)) return "You're not in that party.";
+      if (action === "start") {
+        if (!canTalk(p, userId)) return p.talk === "nobody" ? "Talking is off in this party." : "The host hasn't let you talk in this party.";
+        if (p.floor && p.floor.memberId !== memberId) return `${p.floor.name} is talking.`;
+        if (p.floor) clearTimeout(p.floor.timer);
+        const w = who(p, userId);
+        p.floor = { memberId, userId, name: w.name, color: w.color, timer: setTimeout(() => releaseFloor(p), TALK_MAX_MS) };
+        p.floor.timer.unref?.();
+        toAll(p, { type: "talk-start", member: memberId, name: w.name, color: w.color });
+        return null;
+      }
+      if (action === "audio") {
+        if (!p.floor || p.floor.memberId !== memberId) return "Hold the talk button first.";
+        if (typeof data !== "string" || !data || data.length > TALK_CHUNK_MAX || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return "Bad audio.";
+        toAll(p, { type: "talk", member: memberId, seq: Number(seq) || 0, data }, userId);
+        return null;
+      }
+      if (action === "end") {
+        if (p.floor && p.floor.memberId === memberId) releaseFloor(p);
+        return null;
+      }
+      return "Unknown action.";
     },
 
     // What the host's apps offer, for someone allowed to choose. null: not allowed.

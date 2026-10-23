@@ -56,7 +56,15 @@
   // goes there through YouTube's redirect and comes straight back into the party.
   const viaFullscreen = (query) => location.assign(`https://www.youtube.com/redirect?q=${encodeURIComponent(`${location.origin}/?fs=1&${query}`)}`);
   $("partyFullscreen").hidden = !(f.isTesla && !f.inFullscreen);
-  $("partyFullscreen").onclick = () => session && viaFullscreen(`party=${encodeURIComponent(session.code)}`);
+  $("partyFullscreen").onclick = () => {
+    if (!session) return;
+    const go = () => viaFullscreen(`party=${encodeURIComponent(session.code)}`);
+    // The car's mic is off in fullscreen: say so first to anyone who could talk.
+    if (party && party.you.talk && party.talk !== "nobody") {
+      return ask("Go fullscreen?", "Tesla turns the microphone off in fullscreen, so Talk won't work there. You'll still hear everyone.", "Go fullscreen", go);
+    }
+    go();
+  };
 
   function renderBar() {
     const mine = lobby.find((p) => p.mine);
@@ -124,8 +132,9 @@
     { key: "accounts", label: "Frunk accounts", options: [["open", "Join"], ["ask", "Ask me"]] },
     { key: "guests", label: "Guests", options: [["no", "Blocked"], ["ask", "Ask me"], ["open", "Join"]] },
     { key: "mode", label: "Controls playback", options: [["host", "Me"], ["everyone", "Everyone"], ["copilots", "Co-pilots"]] },
+    { key: "talk", label: "Can talk", options: [["everyone", "Everyone"], ["accounts", "Accounts"], ["pilots", "Me & co-pilots"], ["nobody", "Nobody"]] },
   ];
-  const DEFAULT_CHOICES = { accounts: "open", guests: "ask", mode: "host" };
+  const DEFAULT_CHOICES = { accounts: "open", guests: "ask", mode: "host", talk: "accounts" };
   // after: { key: () => elements } shown right under that choice's row.
   function renderChoices(box, values, onPick, after = {}) {
     box.replaceChildren(...CHOICES.flatMap(({ key, label, options }) => {
@@ -160,7 +169,7 @@
       store.lset("frunk-party-choices", values);
       const { code } = await f.api("/api/party", {
         method: "POST",
-        body: JSON.stringify({ mode: values.mode, access: { accounts: values.accounts, guests: values.guests } }),
+        body: JSON.stringify({ mode: values.mode, talk: values.talk, access: { accounts: values.accounts, guests: values.guests } }),
       });
       $("partySetup").close();
       await join(code);
@@ -212,6 +221,9 @@
       else if (msg.type === "removed") finish(`${msg.by} removed you from the party.`);
       else if (msg.type === "knock") knocked(msg.request);
       else if (msg.type === "knock-done") knockDone(msg.id);
+      else if (msg.type === "talk") window.frunkTalk.play(msg.data);
+      else if (msg.type === "talk-start") talkStarted(msg);
+      else if (msg.type === "talk-end") talkEnded(msg);
     };
     // Closed for good (the server said no): rejoin, which also tells us if it ended.
     es.onerror = () => {
@@ -335,6 +347,7 @@
   function finish(message) {
     if (events) events.close();
     events = null;
+    stopTalking();
     session = null;
     party = null;
     store.del("frunk-party");
@@ -427,6 +440,7 @@
     $("partyPlay").setAttribute("aria-label", state.playing ? "Pause" : "Play");
     $("partyWho").textContent = you.control ? "" : `${h.name} controls playback`;
     $("partyMiniTitle").textContent = state.media ? state.media.title : `${h.name}'s party`;
+    renderTalk();
     if ($("partySettings").open) renderSettings(); // people come and go while it's open
   }
 
@@ -463,6 +477,183 @@
     scrubbing = false;
     control("seek", { position: Number($("partySeek").value) });
   };
+  // ---------- Push-to-talk ----------
+  // Hold Talk (or Space) to speak to everyone in the party, one person at a
+  // time, like a walkie-talkie (talk.js; relayed by the server). The Tesla turns
+  // the mic off in fullscreen, so there Talk explains that instead; everyone
+  // still hears. While someone else talks, the movie dips.
+  const talk = window.frunkTalk;
+  const talkBtn = $("partyTalk");
+  let talkHeld = false; // finger (or Space) down
+  let talkLive = false; // the floor is ours and chunks are going out
+  let talkEnding = false;
+  let talkQueue = [];
+  let talkSending = false;
+  let talkSeq = 0;
+  const micOffHere = () => f.isTesla && f.inFullscreen;
+  function talkBlocked() {
+    if (!party.you.talk) {
+      if (party.talk === "accounts") return "Talking in this party needs a Frunk account.";
+      return "The host hasn't let you talk in this party.";
+    }
+    if (micOffHere()) return "Tesla turns the microphone off in fullscreen. You'll still hear everyone. Exit fullscreen to talk.";
+    if (!talk.supported()) return "This browser can't use a microphone here.";
+    return null;
+  }
+  function renderTalk() {
+    if (!party || !session) return;
+    const t = party.talking;
+    const other = !!t && t.member !== session.member;
+    talkBtn.hidden = party.talk === "nobody";
+    talkBtn.classList.toggle("live", talkLive);
+    talkBtn.classList.toggle("off", !!talkBlocked());
+    talkBtn.classList.toggle("busy", other);
+    $("partyTalkText").textContent = talkLive ? "Talking" : party.you.talk && micOffHere() ? "Mic off" : "Talk";
+    const banner = $("partyTalking");
+    banner.hidden = !t;
+    if (t) banner.replaceChildren(dot(t), other ? `${t.name} is talking` : "You're talking");
+    duck(other);
+  }
+  // The movie at a quarter volume while someone else talks; back up once their
+  // last words have played.
+  let ducked = false;
+  let unduckTimer = null;
+  function duck(on) {
+    clearTimeout(unduckTimer);
+    if (on && !ducked) setDuck(true);
+    else if (!on && ducked) unduckTimer = setTimeout(() => setDuck(false), 600);
+  }
+  function setDuck(on) {
+    ducked = on;
+    video.volume = on ? 0.25 : 1;
+    car.duck(on ? 0.25 : 1);
+  }
+
+  async function talkDown() {
+    if (talkHeld || !party) return;
+    wake();
+    talk.unlock();
+    const blocked = talkBlocked();
+    if (blocked) return f.toast(blocked, 6000);
+    const t = party.talking;
+    if (t && t.member !== session.member) return f.toast(`${t.name} is talking`, 2500);
+    talkHeld = true;
+    talkBtn.classList.add("opening");
+    const s = session;
+    try {
+      await talk.start(sendChunk);
+    } catch (err) {
+      talkHeld = false;
+      talkBtn.classList.remove("opening");
+      return f.toast(err.message, 6000);
+    }
+    talkBtn.classList.remove("opening");
+    if (!talkHeld || session !== s) return talk.stop(); // let go while the mic was starting
+    try {
+      await f.api(`/api/party/${s.code}/talk`, { method: "POST", body: JSON.stringify({ member: s.member, action: "start" }) });
+    } catch (err) {
+      talkHeld = false;
+      talk.stop();
+      return f.toast(err.message, 3000);
+    }
+    talkSeq = 0;
+    talkQueue = [];
+    talkLive = true;
+    renderTalk();
+    if (!talkHeld) talkUp(); // let go while asking for the floor
+  }
+  function talkUp() {
+    if (talkHeld) {
+      talkHeld = false;
+      talk.stop(); // sends the last bit
+    }
+    if (!talkLive || talkEnding) return;
+    // Let the last bit arrive (the mic flushes within 100 ms), then let go of the floor.
+    talkEnding = true;
+    setTimeout(() => {
+      talkLive = false;
+      renderTalk();
+      if (!talkSending) sendEnd();
+    }, 150);
+  }
+  // One chunk at a time, in order; a slow connection drops the oldest rather
+  // than falling ever further behind.
+  function sendChunk(data) {
+    if (!talkLive) return;
+    talkQueue.push({ seq: ++talkSeq, data });
+    if (talkQueue.length > 10) talkQueue.shift();
+    pump();
+  }
+  async function pump() {
+    if (talkSending) return;
+    talkSending = true;
+    const s = session;
+    while (talkQueue.length && session === s) {
+      const chunk = talkQueue.shift();
+      await f.api(`/api/party/${s.code}/talk`, { method: "POST", body: JSON.stringify({ member: s.member, action: "audio", ...chunk }) }).catch(() => {});
+    }
+    talkSending = false;
+    if (talkEnding && !talkLive) sendEnd();
+  }
+  function sendEnd() {
+    if (!talkEnding) return;
+    talkEnding = false;
+    talkQueue = [];
+    if (session) f.api(`/api/party/${session.code}/talk`, { method: "POST", body: JSON.stringify({ member: session.member, action: "end" }) }).catch(() => {});
+  }
+  function talkStarted(msg) {
+    if (!party) return;
+    party.talking = { member: msg.member, name: msg.name, color: msg.color };
+    talk.reset();
+    renderTalk();
+  }
+  function talkEnded(msg) {
+    if (!party) return;
+    if (party.talking && party.talking.member === msg.member) party.talking = null;
+    // Ours, cut off while still holding: the 30-second limit (or the host changed who can talk).
+    if (session && msg.member === session.member && talkLive && !talkEnding) {
+      talkLive = false;
+      talkHeld = false;
+      talkQueue = [];
+      talk.stop();
+      f.toast("That's the limit for one go. Press Talk again to keep talking.", 4000);
+    }
+    renderTalk();
+  }
+  function stopTalking() {
+    talkHeld = false;
+    talkLive = false;
+    talkEnding = false;
+    talkQueue = [];
+    talk.close();
+    clearTimeout(unduckTimer);
+    if (ducked) setDuck(false);
+    $("partyTalking").hidden = true;
+  }
+  talkBtn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    try { talkBtn.setPointerCapture(e.pointerId); } catch {}
+    talkDown();
+  });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) talkBtn.addEventListener(type, talkUp);
+  talkBtn.addEventListener("contextmenu", (e) => e.preventDefault()); // a long press isn't a menu
+  talkBtn.addEventListener("click", (e) => e.preventDefault());
+  // Space, on a keyboard: not while typing, and not as a click on a focused button.
+  const spaceTalks = (e) => e.code === "Space" && session && !view.hidden && !view.classList.contains("mini") &&
+    !e.target.closest("input, textarea, select") && !document.querySelector("dialog[open]");
+  document.addEventListener("keydown", (e) => {
+    if (!spaceTalks(e)) return;
+    e.preventDefault();
+    if (!e.repeat) talkDown();
+  });
+  document.addEventListener("keyup", (e) => {
+    if (e.code !== "Space" || (!talkHeld && !talkLive)) return;
+    e.preventDefault();
+    talkUp();
+  });
+  // Voices need the page to have been tapped once; any tap on the party will do.
+  view.addEventListener("pointerdown", () => talk.unlock());
+
   $("partyLeave").onclick = () => {
     if (!party.you.host) return leave();
     ask("End the party?", "Everyone's playback stops.", "End party", async () => {
@@ -1032,8 +1223,8 @@
   // Who can join and control; with Co-pilots, the people to pick right under it.
   // Then the people here, to remove.
   function renderSettings() {
-    renderChoices($("partySettingsChoices"), { ...party.access, mode: party.mode }, (key, value) =>
-      saveSettings(key === "mode" ? { mode: value } : { access: { [key]: value } }), {
+    renderChoices($("partySettingsChoices"), { ...party.access, mode: party.mode, talk: party.talk }, (key, value) =>
+      saveSettings(key === "mode" || key === "talk" ? { [key]: value } : { access: { [key]: value } }), {
       mode: () => (party.mode === "copilots" ? [copilotPicker()] : []),
     });
     const others = party.people.filter((p) => !p.host);

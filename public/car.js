@@ -207,6 +207,12 @@ window.frunkCar = (() => {
     get duration() {
       return info && info.duration ? info.duration / 1000 : NaN;
     },
+    // 0..1, for the movie to dip while someone in the party talks.
+    level: 1,
+    duck(level) {
+      car.level = level;
+      if (player) player.volume = level;
+    },
     get currentTime() {
       return player && frames ? joinPos + player.currentTime : NaN;
     },

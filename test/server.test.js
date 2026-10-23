@@ -395,7 +395,7 @@ test("watch party: hosting, joining, who controls what", async (t) => {
   assert.equal((await post(`/api/party/${code}/join`, admin, { member: host.member })).body.member, host.member);
   const guest = (await post(`/api/party/${code.toLowerCase()}/join`, member, { member: host.member })).body;
   assert.notEqual(guest.member, host.member);
-  assert.deepEqual(guest.party.you, { host: false, guest: false, control: false, choose: false });
+  assert.deepEqual(guest.party.you, { host: false, guest: false, control: false, choose: false, talk: true });
   assert.equal(guest.party.people.length, 2);
 
   const hostEvents = await events(srv, `/api/party/${code}/events/${host.member}`, admin);
@@ -430,14 +430,14 @@ test("watch party: hosting, joining, who controls what", async (t) => {
 
   // Co-pilots may also choose what plays.
   await post(`/api/party/${code}/settings`, admin, { member: host.member, mode: "copilots", copilots: [guest.member] });
-  assert.deepEqual((await guestEvents.next()).party.you, { host: false, guest: false, control: true, choose: true });
+  assert.deepEqual((await guestEvents.next()).party.you, { host: false, guest: false, control: true, choose: true, talk: true });
   assert.equal((await srv.request("GET", `/api/party/${code}/sources/${guest.member}`, { cookie: member })).body[0].id, "test");
   assert.equal((await control(member, guest.member, { action: "pause", position: 3 })).status, 200, "a co-pilot can pause");
   const coPaused = await guestEvents.next();
   assert.equal(coPaused.party.people.find((p) => p.name === "Member").copilot, true);
   // Unpicked: back to watching.
   await post(`/api/party/${code}/settings`, admin, { member: host.member, copilots: [] });
-  assert.deepEqual((await guestEvents.next()).party.you, { host: false, guest: false, control: false, choose: false });
+  assert.deepEqual((await guestEvents.next()).party.you, { host: false, guest: false, control: false, choose: false, talk: true });
 
   // Only the host can end it; everyone is told, and it leaves the lobby.
   assert.equal((await post(`/api/party/${code}/end`, member)).status, 400);
@@ -717,7 +717,7 @@ test("watch party guests and asking to join: approve, deny, remove", async (t) =
   assert.equal((await answer(request.id, true)).status, 400, "already answered");
   assert.equal((await srv.request("GET", `/api/party/${code}/request`, { cookie: emma })).body.status, "allowed");
   const guest = (await post(`/api/party/${code}/join`, emma)).body;
-  assert.deepEqual(guest.party.you, { host: false, guest: true, control: false, choose: false });
+  assert.deepEqual(guest.party.you, { host: false, guest: true, control: false, choose: false, talk: false });
   assert.deepEqual(guest.party.people.map((p) => [p.name, p.guest]), [["owner", false], ["Emma", true]]);
 
   // A guest watches and chats, but can't pick, browse or host, even as a co-pilot.
@@ -755,4 +755,59 @@ test("watch party guests and asking to join: approve, deny, remove", async (t) =
   const other = (await post("/api/party", member)).status;
   assert.equal(other, 403, "member has nothing to host from");
   await Promise.all([hostEvents.close(), guestEvents.close()]);
+});
+
+test("watch party push-to-talk: one talker, voice to everyone else, guests only when allowed", async (t) => {
+  const { srv, admin, member } = await serverWithPeople();
+  t.after(() => srv.stop());
+  const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
+  const { code } = (await post("/api/party", admin, { access: { accounts: "open", guests: "open" } })).body;
+  const host = (await post(`/api/party/${code}/join`, admin)).body;
+  assert.equal(host.party.talk, "accounts", "accounts can talk by default");
+  const mem = (await post(`/api/party/${code}/join`, member)).body;
+  const g = await post(`/api/party/${code}/guest`, undefined, { name: "Emma" });
+  const emma = g.headers.getSetCookie().find((c) => c.startsWith("frunk_guest=")).split(";")[0];
+  const guest = g.body;
+  const hostEvents = await events(srv, `/api/party/${code}/events/${host.member}`, admin);
+  const memberEvents = await events(srv, `/api/party/${code}/events/${mem.member}`, member);
+  const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, emma);
+  const talk = (cookie, m, body) => post(`/api/party/${code}/talk`, cookie, { member: m, ...body });
+
+  // Guests listen but can't talk by default.
+  assert.equal(guest.party.you.talk, false);
+  assert.equal((await talk(emma, guest.member, { action: "start" })).status, 400);
+
+  // One talker at a time; everyone sees who.
+  assert.equal((await talk(member, mem.member, { action: "start" })).status, 200);
+  assert.equal((await hostEvents.nextOf("talk-start")).name, "Member");
+  assert.equal((await guestEvents.nextOf("talk-start")).name, "Member");
+  const busy = await talk(admin, host.member, { action: "start" });
+  assert.equal(busy.status, 400);
+  assert.match(busy.body.error, /Member is talking/);
+  assert.equal((await talk(admin, host.member, { action: "audio", seq: 1, data: "AAAA" })).status, 400, "not holding the floor");
+
+  // Voice goes to everyone else, never back to the talker.
+  assert.equal((await talk(member, mem.member, { action: "audio", seq: 1, data: "f39/fw==" })).status, 200);
+  assert.equal((await talk(member, mem.member, { action: "audio", seq: 2, data: "not base64!" })).status, 400);
+  assert.equal((await talk(member, mem.member, { action: "audio", seq: 3, data: "A".repeat(20_000) })).status, 400, "too big");
+  for (const ev of [hostEvents, guestEvents]) {
+    const { seq, data, member: from } = await ev.nextOf("talk");
+    assert.deepEqual([seq, data, from], [1, "f39/fw==", mem.member]);
+  }
+  assert.equal((await talk(member, mem.member, { action: "end" })).status, 200);
+  assert.equal((await hostEvents.nextOf("talk-end")).member, mem.member);
+  const seen = [];
+  for (let msg; (msg = await memberEvents.next()).type !== "talk-end";) seen.push(msg.type);
+  assert.ok(seen.includes("talk-start") && !seen.includes("talk"), "the talker doesn't hear themself");
+
+  // The host lets everyone talk, then turns it off, which also ends a turn.
+  assert.equal((await post(`/api/party/${code}/settings`, admin, { member: host.member, talk: "loud" })).status, 400);
+  await post(`/api/party/${code}/settings`, admin, { member: host.member, talk: "everyone" });
+  assert.equal((await guestEvents.nextOf("party")).party.you.talk, true);
+  assert.equal((await talk(emma, guest.member, { action: "start" })).status, 200);
+  await post(`/api/party/${code}/settings`, admin, { member: host.member, talk: "nobody" });
+  assert.equal((await hostEvents.nextOf("talk-end")).member, guest.member);
+  const off = await talk(admin, host.member, { action: "start" });
+  assert.match(off.body.error, /off in this party/);
+  await Promise.all([hostEvents.close(), memberEvents.close(), guestEvents.close()]);
 });

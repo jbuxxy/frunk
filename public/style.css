@@ -783,3 +783,22 @@ dialog.party-pick { width: min(980px, calc(100vw - 32px)); }
 .copilot-pick .send-person:disabled { opacity: .5; cursor: default; }
 .copilot-pick .send-person:disabled .send-check { visibility: hidden; }
 .copilot-pick .person-name { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; }
+
+/* Push-to-talk: hold the button; a banner says who's talking */
+.party-talk { gap: 10px; min-width: 132px; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.party-talk svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.party-talk.live { background: var(--red, #e82127); color: #fff; box-shadow: 0 0 0 0 rgba(232, 33, 39, .5); animation: talk-live 1.2s ease-out infinite; }
+.party-talk.opening { opacity: .7; }
+.party-talk.off, .party-talk.busy { opacity: .45; }
+@keyframes talk-live { to { box-shadow: 0 0 0 16px rgba(232, 33, 39, 0); } }
+.party-talking {
+  position: absolute; left: 50%; top: 112px; transform: translateX(-50%); z-index: 2;
+  display: flex; align-items: center; gap: 10px; margin: 0;
+  max-width: calc(100% - 32px); padding: 8px 20px 8px 8px; border-radius: 999px;
+  background: rgba(20, 22, 26, .88); box-shadow: 0 0 0 2px rgba(232, 33, 39, .7);
+  font-size: 18px; font-weight: 600; white-space: nowrap;
+}
+.party-talking[hidden] { display: none; }
+.party-talking .party-dot { width: 34px; height: 34px; font-size: 15px; }
+.party.mini .party-talking { top: 8px; font-size: 14px; padding: 4px 12px 4px 4px; }
+.party.mini .party-talking .party-dot { width: 24px; height: 24px; font-size: 12px; }

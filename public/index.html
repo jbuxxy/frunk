@@ -92,6 +92,7 @@
       <button class="pill danger" id="partyLeave">Leave</button>
     </div>
     <p class="party-away" id="partyAway" hidden></p>
+    <p class="party-talking" id="partyTalking" hidden></p>
     <div class="party-controls">
       <button class="icon-btn" id="partyBack" aria-label="Back 10 seconds">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
@@ -105,6 +106,10 @@
       </button>
       <input type="range" class="party-seek" id="partySeek" min="0" max="1" step="any" value="0" aria-label="Position">
       <span class="party-time" id="partyTime"></span>
+      <button class="pill party-talk" id="partyTalk" aria-label="Hold to talk">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        <span id="partyTalkText">Talk</span>
+      </button>
       <button class="pill" id="partyChoose">Choose</button>
       <div class="party-reacts" id="partyReacts"></div>
     </div>
@@ -175,7 +180,7 @@
       <div class="fs-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></div>
       <h2>Go fullscreen?</h2>
       <p class="hint">For the best experience while parked, use Frunk in fullscreen. You'll see a YouTube page &mdash; tap <b>Go to site</b> once and you're back.</p>
-      <p class="rear-tip"><b>Back seat screen?</b> Start something in fullscreen while parked, then tap <b>Join Front Display</b> (it shows a YouTube icon) on the rear screen. It keeps playing back there after you shift out of Park, and passengers can control it.</p>
+      <p class="rear-tip"><b>Back seat screen?</b> Start something in fullscreen while parked, then tap <b>Join Front Display</b> (it shows a YouTube icon) on the rear screen. It keeps playing back there after you shift out of Park, and passengers can control it. In fullscreen the car's microphone is off, so Watch Party's Talk button won't work there; you'll still hear everyone.</p>
       <div class="menu">
         <button type="button" class="pill accent" id="fsPromptGo">Go fullscreen</button>
         <button type="button" class="pill" id="fsPromptJust">Just open</button>
@@ -526,6 +531,7 @@
 
   <script src="/app.js?v=__V__"></script>
   <script src="/car.js?v=__V__"></script>
+  <script src="/talk.js?v=__V__"></script>
   <script src="/party.js?v=__V__"></script>
 </body>
 </html>

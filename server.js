@@ -1183,8 +1183,8 @@ on("GET", "/api/party/sources", "user", ({ res, user }) => json(res, 200, partie
 on("GET", "/api/party/lobby", "user", ({ req, res, user }) => parties.watchLobby(req, res, user.id));
 on("POST", "/api/party", "user", async ({ req, res, user }) => {
   if (!parties.canHost(user.id)) return json(res, 403, { error: "Connect an app that can host a Watch Party first." });
-  const { mode, access } = (await readBody(req)) || {};
-  return json(res, 200, { code: parties.create(user.id, { mode, access }) });
+  const { mode, access, talk } = (await readBody(req)) || {};
+  return json(res, 200, { code: parties.create(user.id, { mode, access, talk }) });
 });
 function joined(res, r) {
   if (!r) return json(res, 404, { error: "That party has ended." });
@@ -1313,7 +1313,7 @@ on("GET", "/api/party/:code/art/:source/:item", "party", async ({ res, params, w
   if (!type || !/^image\/(png|jpeg|webp|gif|avif)/.test(type)) return json(res, 404, { error: "no art" });
   return sendImage(res, type, Buffer.from(await r.arrayBuffer()), "private, max-age=86400");
 });
-for (const [action, access] of [["control", "party"], ["chat", "party"], ["settings", "user"], ["answer", "user"], ["remove", "user"]]) {
+for (const [action, access] of [["control", "party"], ["chat", "party"], ["talk", "party"], ["settings", "user"], ["answer", "user"], ["remove", "user"]]) {
   on("POST", `/api/party/:code/${action}`, access, async ({ req, res, params, who, user }) => {
     const body = (await readBody(req)) || {};
     const error = await parties[action](params.code, body.member, who || user.id, body);

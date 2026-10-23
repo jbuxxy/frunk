@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check accounts.js && node --check mailer.js && node --check fetcher.js && node --check public/app.js && node --check party.js && node --check apps.js && node --check public/party.js",
+    "check": "node --check server.js && node --check accounts.js && node --check mailer.js && node --check fetcher.js && node --check public/app.js && node --check party.js && node --check apps.js && node --check public/party.js && node --check public/talk.js && node --check public/talk-worklet.js",
     "test": "node --test test/*.test.js",
     "test:browser": "node --test test/browser.smoke.js"
   },
