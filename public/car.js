@@ -179,7 +179,7 @@ window.frunkCar = (() => {
         }
       },
     };
-    player = codec === "h264" ? window.H264.createPlayer(url, options) : new window.JSMpeg.Player(url, options);
+    player = codec === "h264" ? window.H264.createPlayer(url, options) : new window.JSMpeg.Player(url, window.H264.soundOptions(options));
     if (car.level !== 1) player.volume = car.level; // someone's talking
     // Sound needs a tap when the browser hasn't let this page play any yet.
     setTimeout(() => {

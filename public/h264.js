@@ -16,6 +16,7 @@
      nextStep({ codec, q }) -> { codec, q, message } | null          a car falling behind
      carNote(why, state) -> the note for FSP's Car check page
      snapshot(player, canvas) -> JPEG data URL of the current picture
+     soundOptions(options) -> options for a JSMpeg.Player (MPEG-1), with pop-free sound
      createPlayer(url, options): JSMpeg.Player options as usual, plus:
        fps            the stream's constant frame rate
        backend        'webcodecs' | 'wasm' (from support())
@@ -300,9 +301,31 @@
     }
   }
 
+  // ---------- sound without pops ----------
+  // A stream arrives in real time, so JSMpeg's sound runs only just ahead of what's
+  // playing; a chunk that comes a little late leaves a gap (a pop), and JSMpeg starts
+  // the next right away, still with nothing in hand. After a gap, start it a little
+  // ahead instead, and let a bit more be queued, so jitter doesn't run it dry again.
+  var CUSHION = 0.15;
+  var MAX_AUDIO_LAG = 0.25 + 2 * CUSHION; // what JSMpeg may have queued before it drops sound
+  function cushionSound() {
+    var W = window.JSMpeg && window.JSMpeg.AudioOutput && window.JSMpeg.AudioOutput.WebAudio;
+    if (!W || W.prototype.cushioned) return;
+    var play = W.prototype.play;
+    W.prototype.play = function () {
+      if (this.context && this.startTime < this.context.currentTime) {
+        this.startTime = this.context.currentTime + CUSHION;
+        this.wallclockStartTime = performance.now() / 1000 + CUSHION;
+      }
+      return play.apply(this, arguments);
+    };
+    W.prototype.cushioned = true;
+  }
+
   // ---------- a JSMpeg player with this decoder ----------
   function createPlayer(url, options) {
-    var opts = {};
+    cushionSound();
+    var opts = { maxAudioLag: MAX_AUDIO_LAG };
     for (var k in options) opts[k] = options[k];
     opts.video = false; // JSMpeg's own MPEG-1 decoder isn't wanted
     opts.streaming = true;
@@ -320,5 +343,7 @@
   window.H264 = {
     support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer,
     choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot,
+    // For an MPEG-1 JSMpeg.Player: the same sound handling as createPlayer's.
+    soundOptions: function (options) { cushionSound(); options.maxAudioLag = MAX_AUDIO_LAG; return options; },
   };
 })();

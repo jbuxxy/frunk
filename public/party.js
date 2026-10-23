@@ -756,7 +756,7 @@
     if (Number.isFinite(video.duration)) want = Math.min(want, video.duration);
     if (!s.playing) {
       if (!video.paused) video.pause();
-      video.playbackRate = 1;
+      setRate(1);
       if (Math.abs(video.currentTime - want) > 0.25 && !video.seeking) video.currentTime = want;
       return showTime();
     }
@@ -774,16 +774,22 @@
       // to cover the seek itself; not again until that one has landed.
       if (!video.seeking && Date.now() - lastSeek > 3000) {
         lastSeek = Date.now();
-        video.playbackRate = 1;
+        setRate(1);
         video.currentTime = want + 0.3;
       }
-    } else if (Math.abs(drift) > 0.15) {
-      // Ease back in step: up to 10% faster or slower (the browser keeps the pitch).
-      video.playbackRate = 1 - Math.max(-0.1, Math.min(0.1, drift * 0.25));
-    } else {
-      video.playbackRate = 1;
+    } else if (Math.abs(drift) > 0.4) {
+      // Ease back in step, 5% faster or slower until within 0.1 s. Every change of
+      // speed makes the browser re-stretch the sound (crackles, on phones especially),
+      // so it's one fixed step, changed rarely: 0.1 to 0.4 s out leaves it as it is.
+      setRate(drift > 0 ? 0.95 : 1.05);
+    } else if (Math.abs(drift) < 0.1) {
+      setRate(1);
     }
     showTime();
+  }
+  // Only when it's a different speed: even setting the same one again can click.
+  function setRate(rate) {
+    if (video.playbackRate !== rate) video.playbackRate = rate;
   }
   setInterval(sync, 500);
   setInterval(() => { if (session && Date.now() - clockSynced > 5 * 60_000) syncClock().catch(() => {}); }, 60_000);
