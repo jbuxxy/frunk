@@ -16,7 +16,7 @@
      nextStep({ codec, q }) -> { codec, q, message } | null          a car falling behind
      carNote(why, state) -> the note for FSP's Car check page
      snapshot(player, canvas) -> JPEG data URL of the current picture
-     soundOptions(options) -> options for a JSMpeg.Player (MPEG-1), with pop-free sound
+     soundOptions(options) -> options for a JSMpeg.Player (MPEG-1): pop-free sound, in step with the picture
      decodeMatrix() -> Promise<{ 'avc-high': 'hardware' | 'software' | 'no', … }>  (CODECS: the strings)
      createPlayer(url, options): JSMpeg.Player options as usual, plus:
        fps            the stream's constant frame rate
@@ -95,6 +95,10 @@
     this.busy = false;
     this.waitingForKey = true; // start (and resync) on a keyframe
     this.frames = 0;
+    this.clock = null; // where the sound is now, as a stream time (set by the player)
+    this.lead = 0;
+    this.sentAt = 0;
+    this.sentPts = this.shownPts = null;
     this.backend = options.backend === 'webcodecs' ? new WebCodecsBackend(this) : new WasmBackend(this);
     var self = this;
     Object.defineProperty(this, 'currentTime', { get: function () { return self.decodedTime; } });
@@ -105,7 +109,7 @@
     var key = isKeyframe(au);
     if (this.waitingForKey && !key) return;
     this.waitingForKey = false;
-    this.queue.push({ data: au, key: key });
+    this.queue.push({ data: au, key: key, pts: pts });
     this.canPlay = true;
     // More than ~2 s piled up: this device can't keep up. Skip to the newest keyframe
     // (dropping P-frames alone would smear the picture) and say so.
@@ -120,14 +124,21 @@
   H264Video.prototype.decode = function () { this.pump(); return false; };
   H264Video.prototype.pump = function () {
     if (this.busy || !this.queue.length || !this.backend.ready) return;
+    // Not yet: the sound hasn't reached this picture (less the time decoding takes).
+    if (early(this.queue[0].pts, this.clock, this.lead)) return;
     var au = this.queue.shift();
     this.busy = true;
+    this.sentAt = performance.now();
+    this.sentPts = au.pts;
     this.backend.decode(au);
   };
   // Called by a backend for each finished frame (or a frame that produced no picture).
   H264Video.prototype.done = function (gotPicture) {
     this.busy = false;
+    // How long a picture takes to decode, smoothed: pictures go in that much early.
+    this.lead += (Math.min((performance.now() - this.sentAt) / 1000, MAX_LEAD) - this.lead) / 8;
     if (gotPicture) {
+      this.shownPts = this.sentPts; // the picture on screen
       this.frames++;
       this.decodedTime += 1 / this.fps;
       if (this.onDecode) this.onDecode(this, 0);
@@ -358,9 +369,65 @@
     W.prototype.cushioned = true;
   }
 
+  // ---------- pictures in step with the sound ----------
+  // JSMpeg draws a streamed picture as soon as it's decoded, but its sound is queued a
+  // little ahead (the cushion, and network jitter), so the sound trailed the picture by
+  // up to half a second. Instead, each picture waits until the sound playing now reaches
+  // its timestamp. Holding the compressed picture back, rather than a decoded one, costs
+  // nothing: no frames held in memory, and the decoder does the same work.
+  var MAX_LEAD = 0.1; // the most a picture is decoded ahead of its time
+  var MAX_WAIT = 1; // further ahead than this, the clocks don't agree: don't wait
+  function early(pts, clock, lead) {
+    if (clock == null || pts == null) return false;
+    var ahead = pts - lead - clock;
+    return ahead > 0 && ahead < MAX_WAIT;
+  }
+  // Where the sound playing now is in the stream: the first sound packet's timestamp,
+  // plus what's been decoded since, less what's still queued to play.
+  function soundClock(player) {
+    var a = player.audio, out = player.audioOut;
+    if (!a || a.firstPts == null || !out) return null;
+    return a.firstPts + a.decodedTime - out.enqueuedTime;
+  }
+  function syncPictures() {
+    var J = window.JSMpeg;
+    if (!J || !J.Player || J.Player.prototype.synced) return;
+    var P = J.Player.prototype, update = P.updateForStreaming;
+    P.updateForStreaming = function () {
+      if (this.video) this.video.clock = soundClock(this);
+      return update.apply(this, arguments);
+    };
+    P.synced = true;
+    [J.Decoder.MP2Audio, J.Decoder.MP2AudioWASM].forEach(function (C) {
+      if (!C) return;
+      var write = C.prototype.write;
+      C.prototype.write = function (pts) {
+        if (this.firstPts == null) this.firstPts = pts;
+        return write.apply(this, arguments);
+      };
+    });
+    // JSMpeg's own MPEG-1 decoders: one picture per packet, so a list of timestamps.
+    [J.Decoder.MPEG1Video, J.Decoder.MPEG1VideoWASM].forEach(function (C) {
+      if (!C) return;
+      var write = C.prototype.write, decode = C.prototype.decode;
+      C.prototype.write = function (pts) {
+        this.times = this.times || [];
+        if (this.times.length < 120) this.times.push(pts);
+        return write.apply(this, arguments);
+      };
+      C.prototype.decode = function () {
+        if (this.times && early(this.times[0], this.clock, 0)) return false;
+        var got = decode.apply(this, arguments);
+        if (got && this.times) this.times.shift();
+        return got;
+      };
+    });
+  }
+
   // ---------- a JSMpeg player with this decoder ----------
   function createPlayer(url, options) {
     cushionSound();
+    syncPictures();
     var opts = { maxAudioLag: MAX_AUDIO_LAG };
     for (var k in options) opts[k] = options[k];
     opts.video = false; // JSMpeg's own MPEG-1 decoder isn't wanted
@@ -380,6 +447,6 @@
     support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer,
     choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot, decodeMatrix: decodeMatrix, CODECS: CODECS,
     // For an MPEG-1 JSMpeg.Player: the same sound handling as createPlayer's.
-    soundOptions: function (options) { cushionSound(); options.maxAudioLag = MAX_AUDIO_LAG; return options; },
+    soundOptions: function (options) { cushionSound(); syncPictures(); options.maxAudioLag = MAX_AUDIO_LAG; return options; },
   };
 })();
