@@ -644,6 +644,11 @@ test("watch party in the car: a Plex party streams through FSP, shared per stret
     if (u.pathname === "/partner/info") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ duration: 1440000, fps: 24, title: "x", codecs: ["h264", "mpeg1"] }));
     if (u.pathname === "/partner/party") return res.writeHead(200, { "content-type": "video/mp2t", "x-stream-pos": "12.500" }).end("ts-bytes");
     if (u.pathname === "/partner/sections") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ids: ["2"] }));
+    if (u.pathname === "/partner/note") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      return req.on("end", () => { asked.at(-1).body = JSON.parse(body); res.writeHead(200, { "content-type": "application/json" }).end("{}"); });
+    }
     if (u.pathname === "/icon.svg") return res.writeHead(200, { "content-type": "image/svg+xml" }).end("<svg xmlns='http://www.w3.org/2000/svg'/>");
     res.writeHead(404).end();
   });
@@ -708,8 +713,17 @@ test("watch party in the car: a Plex party streams through FSP, shared per stret
   assert.equal(keys.at(-2), keys[0]);
   assert.equal(keys.at(-1), `${keys[0]}:abc123`);
 
+  // A car's note goes on to FSP's Car check page, with only the expected fields.
+  const note = await post(`${media.car}/note`, admin, { why: "first minute", fps: 29.8, codec: "h264", secret: "x", ua: "Tesla" });
+  assert.equal(note.status, 200);
+  const sent = asked.find((a) => a.path === "/partner/note");
+  assert.deepEqual(sent.body, { user: "owner", item: "202", why: "first minute", ua: "Tesla", codec: "h264", fps: 29.8 });
+  assert.equal(sent.auth, "Bearer s3cret");
+  assert.equal((await post(`${media.car}/note`, admin, { why: "again" })).status, 429, "one a minute");
+
   // Outsiders and stale choices get nothing.
   assert.equal((await srv.request("GET", `${media.car}/info`)).status, 401);
+  assert.equal((await post(`${media.car}/note`, undefined, {})).status, 401);
   assert.equal((await srv.request("GET", `/api/party/${code}/car/999/info`, { cookie: admin })).status, 404);
 });
 

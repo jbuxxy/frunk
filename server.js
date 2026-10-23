@@ -169,7 +169,10 @@ async function scanPage(siteUrl, allowPrivate) {
     const href = attr(tag, "href");
     if (!href || !/(^|\s)(icon|apple-touch-icon|apple-touch-icon-precomposed|mask-icon)(\s|$)/.test(rel)) continue;
     const size = Number((attr(tag, "sizes") || "").split("x")[0]) || 0;
-    const score = (rel.includes("apple-touch") ? 1000 : 0) + (href.endsWith(".svg") ? 900 : 0) + size - (rel === "mask-icon" ? 2000 : 0);
+    // An SVG icon first: it's usually just the mark, where an apple-touch icon is
+    // an opaque square (its own background) that looks boxed-in on a tile.
+    const svg = /\.svg([?#]|$)/i.test(href) || /svg/i.test(attr(tag, "type") || "");
+    const score = (svg ? 2000 : 0) + (rel.includes("apple-touch") ? 1000 : 0) + size - (rel === "mask-icon" ? 3000 : 0);
     links.push({ url: new URL(href, res.url).href, score });
   }
   links.sort((a, b) => b.score - a.score);
@@ -1273,6 +1276,32 @@ on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who 
   if (!r.ok) return json(res, 502, { error: "FSP can't play this." });
   const { duration, fps, codecs } = await r.json();
   return json(res, 200, { duration, fps, codecs: Array.isArray(codecs) ? codecs : ["mpeg1"] });
+});
+// A party car's quiet note (car.js: after its first minute, and when it steps down),
+// kept by FSP with its own for the owner's Car check page. One a minute per person.
+const CAR_NOTE_FIELDS = ["why", "ua", "gpu", "tier", "cores", "decoder", "codec", "quality", "sourceFps", "fps", "seconds", "sound"];
+const carNotes = new Map(); // who -> last note time
+on("POST", "/api/party/:code/car/:load/note", "party", async ({ req, res, params, who }) => {
+  const c = FSP && parties.carFor(params.code, who, params.load);
+  if (!c) return json(res, 404, { error: "Nothing is playing in the car." });
+  if (Date.now() - (carNotes.get(who) || 0) < 60_000) return json(res, 429, { error: "Too many notes." });
+  carNotes.set(who, Date.now());
+  const body = (await readBody(req)) || {};
+  const note = { user: userById(who)?.name || "Guest", item: c.id };
+  for (const k of CAR_NOTE_FIELDS) {
+    const v = body[k];
+    if (typeof v === "string") note[k] = v.slice(0, 300);
+    else if ((typeof v === "number" && Number.isFinite(v)) || v === null) note[k] = v;
+  }
+  try {
+    await fetch(`${FSP.base}/partner/note`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${FSP.secret}`, "x-plex-token": tokenFor(c.hostId, c.source) || "", "content-type": "application/json" },
+      body: JSON.stringify(note),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {}
+  return json(res, 200, { ok: true });
 });
 on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, params, who }) => {
   const c = FSP && parties.carFor(params.code, who, params.load);

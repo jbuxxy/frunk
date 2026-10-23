@@ -36,9 +36,38 @@ window.frunkCar = (() => {
   let quality = 720;
   let backend = null;
   let steppedAt = 0;
+  // A quiet note for the Car check page in FSP (the owner's): how this car plays,
+  // after its first minute (once per car) and when it steps down.
+  let noteStart = 0;
+  let noteFrames = 0;
+  let noted = false;
+  function gpuName() {
+    try {
+      const gl = document.createElement("canvas").getContext("webgl");
+      const ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
+      return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : null;
+    } catch {
+      return null;
+    }
+  }
+  function carNote(why) {
+    if (!base || !info) return;
+    if (why === "first minute" && keep.get("frunk-carnote")) return;
+    const secs = noteStart ? (Date.now() - noteStart) / 1000 : 0;
+    const ctx = player && player.audioOut && player.audioOut.context;
+    const note = {
+      why, ua: navigator.userAgent, gpu: gpuName(), tier: window.H264 ? window.H264.carTier() : null,
+      cores: navigator.hardwareConcurrency || null, decoder: codec === "h264" ? backend : "mpeg1", codec, quality,
+      sourceFps: info.fps || null, fps: secs ? +(noteFrames / secs).toFixed(1) : 0, seconds: Math.round(secs),
+      sound: ctx ? ctx.state : "none",
+    };
+    fetch(`${base}/note`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(note), credentials: "same-origin", keepalive: true }).catch(() => {});
+    if (why === "first minute") keep.set("frunk-carnote", "1");
+  }
   function stepDown() {
     if (Date.now() - steppedAt < 15_000) return;
     steppedAt = Date.now();
+    carNote("stepped down");
     if (codec === "h264" && quality > 480) {
       quality = 480;
       keep.set("frunk-car-q", "480");
@@ -134,6 +163,8 @@ window.frunkCar = (() => {
     box.append(canvas);
     joinPos = 0;
     frames = 0;
+    noteStart = 0;
+    noteFrames = 0;
     const me = canvas;
     const url = `${base}/stream?codec=${codec}&q=${quality}${solo ? `&solo=${Math.random().toString(36).slice(2, 10)}` : ""}`;
     const Source = fetchSource(
@@ -155,6 +186,12 @@ window.frunkCar = (() => {
         if (canvas !== me) return;
         frames++;
         lastFrame = Date.now();
+        noteFrames++;
+        noteStart ||= lastFrame;
+        if (!noted && lastFrame - noteStart > 60_000) {
+          noted = true;
+          carNote("first minute");
+        }
         if (frames === 1) {
           me.style.opacity = "1";
           box.style.backgroundImage = "";
@@ -162,6 +199,7 @@ window.frunkCar = (() => {
       },
     };
     player = codec === "h264" ? window.H264.createPlayer(url, options) : new window.JSMpeg.Player(url, options);
+    if (car.level !== 1) player.volume = car.level; // someone's talking
     // Sound needs a tap when the browser hasn't let this page play any yet.
     setTimeout(() => {
       const ctx = player && player.audioOut && player.audioOut.context;

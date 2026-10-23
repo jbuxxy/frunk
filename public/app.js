@@ -205,6 +205,8 @@
       const total = buckets[best] + buckets[(best + 1) % 24];
       const hue = (best + (buckets[(best + 1) % 24] / Math.max(total, 1))) * 15;
       const sat = Math.min(0.7, (satSum[best] + satSum[(best + 1) % 24]) / total);
+      // Yellow and amber darken to olive, which reads as green: a deep amber-brown instead.
+      if (hue >= 30 && hue <= 65) return { bg: `hsl(30 ${Math.round(sat * 100)}% 19%)`, fg: "#fff" };
       return { bg: `hsl(${Math.round(hue)} ${Math.round(sat * 100)}% 17%)`, fg: "#fff" };
     } catch {
       return dark;
