@@ -1281,6 +1281,7 @@ on("POST", "/api/party/:code/car/:load/note", "party", async ({ req, res, params
   if (!c) return json(res, 404, { error: "Nothing is playing in the car." });
   if (Date.now() - (carNotes.get(who) || 0) < 60_000) return json(res, 429, { error: "Too many notes." });
   carNotes.set(who, Date.now());
+  if (carNotes.size > 500) for (const [k, t] of carNotes) if (Date.now() - t > 60_000) carNotes.delete(k);
   const body = (await readBody(req)) || {};
   const note = { user: userById(who)?.name || "Guest", item: c.id };
   for (const k of CAR_NOTE_FIELDS) {

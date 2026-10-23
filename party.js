@@ -26,6 +26,7 @@ const TALK = ["everyone", "accounts", "pilots", "nobody"];
 const DEFAULT_TALK = "accounts";
 const TALK_MAX_MS = 30_000; // one turn; the button has to be pressed again after
 const TALK_CHUNK_MAX = 16_000; // base64 chars per chunk: 200 ms of 16 kHz μ-law is about 4,300
+const TALK_RATE = 24_000; // base64 chars a second: 16 kHz μ-law is about 21,400
 
 // The apps a host plays from, given by the server:
 //   sourcesFor(userId): [{ id, name, hosts: [tile hostnames] }] that person can host from
@@ -138,10 +139,14 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
     });
   }
   // To every open page in the party that keep(member) allows, serialized once (voice
-  // goes out five times a second).
-  function toAll(p, msg, keep = () => true) {
+  // goes out five times a second). lossy: skip a page whose connection is already
+  // backed up (voice that late is no use, and it would pile up in memory).
+  function toAll(p, msg, keep = () => true, lossy = false) {
     const line = `data: ${JSON.stringify(msg)}\n\n`;
-    for (const m of p.members.values()) if (keep(m)) for (const res of m.streams) res.write(line);
+    for (const m of p.members.values()) {
+      if (!keep(m)) continue;
+      for (const res of m.streams) if (!lossy || res.writableLength < 256 * 1024) res.write(line);
+    }
   }
   const isHere = (p, userId) => !!p && [...p.members.values()].some((m) => m.userId === userId);
   // The talk button let go, timed out, or the talker gone or no longer allowed.
@@ -501,7 +506,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
         if (p.floor && p.floor.memberId !== memberId) return `${p.floor.name} is talking.`;
         if (p.floor) clearTimeout(p.floor.timer);
         const w = who(p, userId);
-        p.floor = { memberId, userId, name: w.name, color: w.color, timer: setTimeout(() => releaseFloor(p), TALK_MAX_MS) };
+        p.floor = { memberId, userId, name: w.name, color: w.color, since: Date.now(), sent: 0, timer: setTimeout(() => releaseFloor(p), TALK_MAX_MS) };
         p.floor.timer.unref?.();
         toAll(p, { type: "talk-start", member: memberId, name: w.name, color: w.color });
         return null;
@@ -509,7 +514,10 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       if (action === "audio") {
         if (!p.floor || p.floor.memberId !== memberId) return "Hold the talk button first.";
         if (typeof data !== "string" || !data || data.length > TALK_CHUNK_MAX || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return "Bad audio.";
-        toAll(p, { type: "talk", member: memberId, seq: Number(seq) || 0, data }, (m) => m.userId !== userId);
+        // No faster than someone talking (TALK_RATE), with a couple of seconds' slack.
+        p.floor.sent += data.length;
+        if (p.floor.sent > ((Date.now() - p.floor.since) / 1000 + 2) * TALK_RATE) return "Too much audio.";
+        toAll(p, { type: "talk", member: memberId, seq: Number(seq) || 0, data }, (m) => m.userId !== userId, true);
         return null;
       }
       if (action === "end") {

@@ -122,6 +122,7 @@ window.frunkCar = (() => {
   let lastFrame = 0;
   let retryAt = 0; // after a failed start, wait before trying again
   let rejoinedAt = 0; // when this car last rejoined the shared stream to catch up
+  let streamAt; // the party's state.at this stream belongs to (see sync)
   let ready = false; // load() has picked the codec and quality; no stream before that
 
   function stop(keepPicture) {
@@ -227,6 +228,7 @@ window.frunkCar = (() => {
       base = null;
       info = null;
       retryAt = 0;
+      streamAt = undefined;
       car.active = false;
       box.hidden = true;
       box.style.backgroundImage = "";
@@ -243,11 +245,22 @@ window.frunkCar = (() => {
     get currentTime() {
       return player && frames ? joinPos + player.currentTime : NaN;
     },
-    // Twice a second from party.js: follow the party's clock.
-    sync(playing, want) {
+    // Twice a second from party.js: follow the party's clock. at: when the party last
+    // played, paused or seeked, which is when its shared stream starts over.
+    sync(playing, want, at) {
       if (!base || !ready) return;
       const now = Date.now();
       if (!playing) return stop(true);
+      if (at !== streamAt) {
+        // A new stretch: every car moves to its shared stream straight away (not after
+        // falling out of step, which would also have looked like drift; see below).
+        streamAt = at;
+        rejoinedAt = 0;
+        if (player) {
+          stop(true);
+          return open(false);
+        }
+      }
       if (!player) {
         if (now >= retryAt && now - openedAt > 1000) open(false);
         return;

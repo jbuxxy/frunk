@@ -743,7 +743,7 @@
   // Twice a second: match the party's clock.
   function sync() {
     if (car.active) {
-      if (party && party.state.media) car.sync(party.state.playing, target());
+      if (party && party.state.media) car.sync(party.state.playing, target(), party.state.at);
       return showTime();
     }
     if (!party || !party.state.media || video.readyState < 1) return showTime();

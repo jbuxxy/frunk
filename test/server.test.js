@@ -833,6 +833,10 @@ test("watch party push-to-talk: one talker, voice to everyone else, guests only 
     const { seq, data, member: from } = await ev.nextOf("talk");
     assert.deepEqual([seq, data, from], [1, "f39/fw==", mem.member]);
   }
+  // No faster than someone can talk.
+  const flood = [];
+  for (let i = 0; i < 8; i++) flood.push((await talk(member, mem.member, { action: "audio", seq: 10 + i, data: "A".repeat(12_000) })).status);
+  assert.ok(flood.includes(400) && flood[0] === 200, `flood: ${flood}`);
   assert.equal((await talk(member, mem.member, { action: "end" })).status, 200);
   assert.equal((await hostEvents.nextOf("talk-end")).member, mem.member);
   const seen = [];
