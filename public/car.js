@@ -61,47 +61,6 @@ window.frunkCar = (() => {
     open(false); // the party's shared stream for the new setting
   }
 
-  // A JSMpeg source over plain HTTP streaming, instead of its WebSocket one.
-  function fetchSource(onHeaders, onFail) {
-    return class FetchSource {
-      constructor(url) {
-        this.url = url;
-        this.destination = null;
-        this.streaming = true;
-        this.established = false;
-        this.completed = false;
-        this.progress = 0;
-        this.ctl = new AbortController();
-      }
-      connect(destination) {
-        this.destination = destination;
-      }
-      start() {
-        fetch(this.url, { signal: this.ctl.signal, credentials: "same-origin", cache: "no-store" })
-          .then(async (r) => {
-            if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "The car player couldn't start.");
-            onHeaders(r.headers);
-            this.progress = 1;
-            const reader = r.body.getReader();
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              this.established = true;
-              if (this.destination) this.destination.write(value);
-            }
-            this.completed = true;
-          })
-          .catch((err) => {
-            if (err.name !== "AbortError") onFail(err);
-          });
-      }
-      resume() {}
-      destroy() {
-        this.ctl.abort();
-      }
-    };
-  }
-
   let base = null; // /api/party/<code>/car/<load>
   let info = null; // { duration (ms), fps }
   let player = null;
@@ -149,7 +108,7 @@ window.frunkCar = (() => {
     noteStart = 0;
     const me = canvas;
     const url = `${base}/stream?codec=${codec}&q=${quality}${solo ? `&solo=${Math.random().toString(36).slice(2, 10)}` : ""}`;
-    const Source = fetchSource(
+    const Source = window.H264.fetchSource(
       (headers) => { joinPos = parseFloat(headers.get("x-stream-pos")) || 0; },
       (err) => {
         if (canvas !== me) return;

@@ -16,6 +16,7 @@
      nextStep({ codec, q }) -> { codec, q, message } | null          a car falling behind
      carNote(why, state) -> the note for FSP's Car check page
      snapshot(player, canvas) -> JPEG data URL of the current picture
+     fetchSource(onHeaders, onFail) -> a JSMpeg source (options.source) streaming over HTTP
      soundOptions(options) -> options for a JSMpeg.Player (MPEG-1): pop-free sound, in step with the picture
      decodeMatrix() -> Promise<{ 'avc-high': 'hardware' | 'software' | 'no', … }>  (CODECS: the strings)
      createPlayer(url, options): JSMpeg.Player options as usual, plus:
@@ -424,6 +425,48 @@
     });
   }
 
+  // ---------- the stream over plain HTTP ----------
+  // A JSMpeg source reading one long HTTP response, in place of its WebSocket source: the
+  // server hands that connection straight to ffmpeg. onHeaders(headers) once it starts,
+  // onFail(error) when it's refused or breaks off (not when it's stopped or ends).
+  function fetchSource(onHeaders, onFail) {
+    function FetchSource(url) {
+      this.url = url;
+      this.destination = null;
+      this.streaming = true;
+      this.established = false;
+      this.completed = false;
+      this.progress = 0;
+      this.ctl = new AbortController();
+    }
+    FetchSource.prototype.connect = function (destination) { this.destination = destination; };
+    FetchSource.prototype.start = function () {
+      var self = this;
+      fetch(this.url, { signal: this.ctl.signal, credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
+        if (!r.ok) {
+          return r.json().catch(function () { return {}; }).then(function (b) { throw new Error(b.error || "The video couldn't start"); });
+        }
+        if (onHeaders) onHeaders(r.headers);
+        self.progress = 1;
+        var reader = r.body.getReader();
+        function next() {
+          return reader.read().then(function (x) {
+            if (x.done) { self.completed = true; return; }
+            self.established = true;
+            if (self.destination) self.destination.write(x.value);
+            return next();
+          });
+        }
+        return next();
+      }).catch(function (err) {
+        if (err.name !== 'AbortError' && onFail) onFail(err);
+      });
+    };
+    FetchSource.prototype.resume = function () {};
+    FetchSource.prototype.destroy = function () { this.ctl.abort(); };
+    return FetchSource;
+  }
+
   // ---------- a JSMpeg player with this decoder ----------
   function createPlayer(url, options) {
     cushionSound();
@@ -445,7 +488,7 @@
 
   window.H264 = {
     support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer,
-    choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot, decodeMatrix: decodeMatrix, CODECS: CODECS,
+    fetchSource: fetchSource, choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot, decodeMatrix: decodeMatrix, CODECS: CODECS,
     // For an MPEG-1 JSMpeg.Player: the same sound handling as createPlayer's.
     soundOptions: function (options) { cushionSound(); syncPictures(); options.maxAudioLag = MAX_AUDIO_LAG; return options; },
   };
