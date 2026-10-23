@@ -144,6 +144,8 @@
   function cardColors(site) {
     if (site.color) return { bg: site.color, fg: luminance(site.color) > 0.6 ? "#111" : "#fff" };
     const art = site.art;
+    // A see-through logo from the site itself (tileArt): its own color.
+    if (!art && site.id && clearTints.has(iconSrc(site))) return clearTints.get(iconSrc(site));
     if (art && art.type === "mark") {
       const l = luminance(art.hex);
       if (l > 0.35) return { bg: "#17191d", fg: art.hex };
@@ -158,6 +160,7 @@
   const NEUTRAL = "#1f2228";
   const LIGHT = "#e9ebef"; // for dark/black logos that would vanish on a dark card
   const tintCache = new Map(); // image src -> { bg, fg }
+  const clearTints = new Map(); // a site icon's src -> { bg, fg }, once seen to be see-through
 
   // Main hue of a logo -> deep tinted card color. Multicolor logos (Immich's
   // pinwheel) and white/gray ones get the neutral dark card; mostly black logos
@@ -214,8 +217,8 @@
   }
 
   function iconSrc(site) {
-    // Version the URL so a changed address or icon fetches a fresh image.
-    return `/api/icon/${site.id}?v=${hash(site.icon || site.url).toString(36)}`;
+    // Versioned so a changed address, or a newly fetched icon (iconV), loads afresh.
+    return `/api/icon/${site.id}?v=${hash(site.icon || site.url).toString(36)}${site.iconV || ""}`;
   }
 
   // A single-color brand logo, tinted with color via a CSS mask.
@@ -276,12 +279,17 @@
       // its own background, stays a badge.
       if (clearCorners(img)) {
         img.className = "custom-logo";
+        const card = tile || badge.closest(".tile"); // the edit box's preview passes no tile
         badge.replaceWith(img);
-        if (tile && !site.color) {
-          const t = tintOf(img, img.src);
-          tile.style.setProperty("--card", t.bg);
-          tile.style.color = t.fg;
+        const src = iconSrc(site);
+        const known = clearTints.has(src);
+        clearTints.set(src, tintOf(img, src));
+        if (card && !site.color) {
+          card.style.setProperty("--card", clearTints.get(src).bg);
+          card.style.color = clearTints.get(src).fg;
         }
+        // The edit box: its Auto color swatch shows this color too, from now on.
+        if (!known && !tile && siteDialog.open) refreshDraft();
         return;
       }
       badge.textContent = "";
@@ -1293,6 +1301,7 @@
   let chosenLogo = null; // brand slug, "di:<name>", "none", or null for automatic
   let logoChoices = [];
   let autoArt = null; // what "Auto" would show for the current name + address
+  let previewRetried = null; // the preview logo already asked for again (refreshDraft)
   let logoSeq = 0;
   let draftId = null;
 
@@ -1340,6 +1349,16 @@
     }
     const card = $("tilePreview");
     card.replaceChildren(tileArt(draft, paintCard(card, draft), null));
+    // A logo the box offered can stop loading if Frunk restarted meanwhile (what it
+    // may fetch is kept in memory): ask for the logos again, once, and redraw.
+    const logo = card.querySelector("img");
+    if (logo && art && art.type === "image" && art.src.startsWith("/api/preview?")) {
+      logo.onerror = () => {
+        if (previewRetried === art.src) return;
+        previewRetried = art.src;
+        loadLogoOptions();
+      };
+    }
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = draft.name;

@@ -411,7 +411,7 @@ function iconVersion(str) {
 //   { type: "image", src }       Dashboard Icons logo (primary) or custom image
 //   { type: "mark", slug, hex }  single-color Simple Icons logo (fallback), tinted by the client
 function artFor(site) {
-  if (site.icon) return { type: "image", src: `/api/icon/${site.id}?v=${iconVersion(site.icon)}` };
+  if (site.icon) return { type: "image", src: `/api/icon/${site.id}?v=${iconVersion(site.icon)}${iconStamp(site)}` };
   if (site.logo === "none") return null;
   if (site.logo?.startsWith("di:")) {
     const name = site.logo.slice(3);
@@ -427,7 +427,24 @@ function artFor(site) {
 
 async function withBrands(sites) {
   await Promise.all([loadBrands(), loadDashIcons()]);
-  return sites.map((s) => ({ ...s, art: artFor(s) || undefined }));
+  return sites.map((s) => {
+    const art = artFor(s);
+    // A site's own icon (the fallback): its version, so the browser asks again once
+    // Frunk has fetched a new one (icons are cached for a day).
+    return { ...s, art: art || undefined, iconV: art ? undefined : iconStamp(s) || undefined };
+  });
+}
+
+// When Frunk last fetched this site's icon (either cache entry), as a short stamp; ""
+// if it hasn't yet.
+function iconStamp(site) {
+  for (const prefix of ["", "public:"]) {
+    const key = crypto.createHash("sha1").update(`${prefix}${site.icon || site.url}`).digest("hex");
+    try {
+      return fs.statSync(path.join(ICON_DIR, key)).mtimeMs.toString(36).replace(".", "");
+    } catch {}
+  }
+  return "";
 }
 
 function isTrustedProxy(addr) {
