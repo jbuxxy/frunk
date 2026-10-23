@@ -638,11 +638,17 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
 test("watch party in the car: a Plex party streams through FSP, shared per stretch", async (t) => {
   // A stand-in FSP: answers info and the party stream, and notes what it was asked.
   const asked = [];
+  let ticketsOn = false; // FSP answering ticket requests (else Frunk passes the stream on)
   const pd = http.createServer((req, res) => {
     const u = new URL(req.url, "http://x");
     asked.push({ path: u.pathname, q: Object.fromEntries(u.searchParams), auth: req.headers.authorization, token: req.headers["x-plex-token"] });
     if (u.pathname === "/partner/info") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ duration: 1440000, fps: 24, title: "x", codecs: ["h264", "mpeg1"] }));
     if (u.pathname === "/partner/party") return res.writeHead(200, { "content-type": "video/mp2t", "x-stream-pos": "12.500" }).end("ts-bytes");
+    if (u.pathname === "/partner/ticket" && ticketsOn) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      return req.on("end", () => { asked.at(-1).body = JSON.parse(body); res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ticket: "T1cket" })); });
+    }
     if (u.pathname === "/partner/sections") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ids: ["2"] }));
     if (u.pathname === "/partner/note") {
       let body = "";
@@ -712,6 +718,17 @@ test("watch party in the car: a Plex party streams through FSP, shared per stret
   const keys = asked.filter((a) => a.path === "/partner/party").map((a) => a.q.key);
   assert.equal(keys.at(-2), keys[0]);
   assert.equal(keys.at(-1), `${keys[0]}:abc123`);
+
+  // With tickets, the car is sent to FSP's public address for its stream instead.
+  ticketsOn = true;
+  const redirected = await fetch(`${srv.base}${media.car}/stream?codec=h264&q=480`, { headers: { cookie: admin }, redirect: "manual" });
+  assert.equal(redirected.status, 302);
+  assert.equal(redirected.headers.get("location"), "https://fsp.example/car/T1cket");
+  const tk = asked.filter((a) => a.path === "/partner/ticket").pop();
+  assert.deepEqual([tk.body.id, tk.body.codec, tk.body.q, tk.auth, tk.token], ["202", "h264", "480", "Bearer s3cret", "server-token"]);
+  assert.match(tk.body.key, new RegExp(`^${code}:\\d+:\\d+$`));
+  assert.match((await srv.request("GET", "/", {})).headers.get("content-security-policy"), /connect-src [^;]*https:\/\/fsp\.example/);
+  ticketsOn = false;
 
   // A car's note goes on to FSP's Car check page, with only the expected fields.
   const note = await post(`${media.car}/note`, admin, { why: "first minute", fps: 29.8, codec: "h264", secret: "x", ua: "Tesla" });

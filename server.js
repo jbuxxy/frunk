@@ -17,6 +17,9 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 // The public default page (what signed-out visitors see; new accounts start from a copy).
 const SITES_FILE = path.join(DATA_DIR, "default.json");
 const PUBLIC_URL = (process.env.FRUNK_PUBLIC_URL || "").replace(/\/$/, "");
+// FSP's public address: a party car streams straight from there (with a ticket).
+const FSP_PUBLIC = (process.env.FSP_PUBLIC_URL || "").replace(/\/$/, "");
+const FSP_ORIGIN = (() => { try { return FSP_PUBLIC && new URL(FSP_PUBLIC).origin; } catch { return ""; } })();
 const GOOGLE_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -468,7 +471,7 @@ const SECURITY_HEADERS = {
     "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style", // Google's button injects inline styles
     "font-src 'self'",
     "img-src 'self' data:",
-    "connect-src 'self' https://accounts.google.com/gsi/ https://test-streams.mux.dev", // Watch Party test stream
+    `connect-src 'self' https://accounts.google.com/gsi/ https://test-streams.mux.dev${FSP_ORIGIN ? ` ${FSP_ORIGIN}` : ""}`, // Watch Party test stream; FSP: car streams (tickets)
     "media-src 'self' blob: https://test-streams.mux.dev", // blob: for hls.js (MediaSource)
     "frame-src https://accounts.google.com/gsi/",
     "frame-ancestors 'none'",
@@ -1318,14 +1321,27 @@ on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, 
   const solo = /^[a-z0-9]{1,16}$/.test(url.searchParams.get("solo") || "") ? `:${url.searchParams.get("solo")}` : "";
   const ctl = new AbortController();
   req.on("close", () => ctl.abort());
+  // What this car plays: H.264 (encoded on FSP's iGPU) or MPEG-1, at 360/480/720.
+  const codec = url.searchParams.get("codec") === "h264" ? "h264" : "mpeg1";
+  const quality = ["360", "480", "720"].includes(url.searchParams.get("q")) ? url.searchParams.get("q") : "720";
+  const stretch = { id: c.id, key: c.segment + solo, pos: c.position.toFixed(2), codec, q: quality };
+  // Straight from FSP when it has a public address: a ticket for this car's stream, and
+  // the car follows the redirect to it, so Frunk passes no video on (it cost ~4% of a core
+  // per car here). Otherwise, or if FSP has no ticket to give, Frunk passes it on itself.
+  if (FSP_PUBLIC) {
+    try {
+      const t = await partner.call("/partner/ticket", tokenFor(c.hostId, c.source), { method: "POST", body: stretch, signal: AbortSignal.timeout(5000) });
+      const { ticket } = t.ok ? await t.json() : {};
+      if (ticket) {
+        res.writeHead(302, { location: `${FSP_PUBLIC}/car/${encodeURIComponent(ticket)}`, "cache-control": "no-store" });
+        return res.end();
+      }
+    } catch {}
+  }
   const slow = setTimeout(() => ctl.abort(), 20_000); // only until FSP starts answering
   let r;
   try {
-    // What this car plays: H.264 (encoded on FSP's iGPU) or MPEG-1, at 360/480/720.
-    const codec = url.searchParams.get("codec") === "h264" ? "h264" : "mpeg1";
-    const quality = ["360", "480", "720"].includes(url.searchParams.get("q")) ? url.searchParams.get("q") : "720";
-    const q = new URLSearchParams({ id: c.id, key: c.segment + solo, pos: c.position.toFixed(2), codec, q: quality });
-    r = await partner.call(`/partner/party?${q}`, tokenFor(c.hostId, c.source), { signal: ctl.signal });
+    r = await partner.call(`/partner/party?${new URLSearchParams(stretch)}`, tokenFor(c.hostId, c.source), { signal: ctl.signal });
   } catch {
     return res.headersSent || json(res, 502, { error: "FSP didn't answer." });
   } finally {
