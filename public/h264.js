@@ -99,7 +99,6 @@
     this.clock = null; // where the sound is now, as a stream time (set by the player)
     this.lead = 0;
     this.sentAt = 0;
-    this.sentPts = this.shownPts = null;
     this.backend = options.backend === 'webcodecs' ? new WebCodecsBackend(this) : new WasmBackend(this);
     var self = this;
     Object.defineProperty(this, 'currentTime', { get: function () { return self.decodedTime; } });
@@ -130,7 +129,6 @@
     var au = this.queue.shift();
     this.busy = true;
     this.sentAt = performance.now();
-    this.sentPts = au.pts;
     this.backend.decode(au);
   };
   // Called by a backend for each finished frame (or a frame that produced no picture).
@@ -139,7 +137,6 @@
     // How long a picture takes to decode, smoothed: pictures go in that much early.
     this.lead += (Math.min((performance.now() - this.sentAt) / 1000, MAX_LEAD) - this.lead) / 8;
     if (gotPicture) {
-      this.shownPts = this.sentPts; // the picture on screen
       this.frames++;
       this.decodedTime += 1 / this.fps;
       if (this.onDecode) this.onDecode(this, 0);
@@ -412,8 +409,10 @@
       if (!C) return;
       var write = C.prototype.write, decode = C.prototype.decode;
       C.prototype.write = function (pts) {
-        this.times = this.times || [];
-        if (this.times.length < 120) this.times.push(pts);
+        if (this.times === undefined) this.times = [];
+        // 4 s of pictures waiting: this car is far behind anyway, so stop timing them
+        // rather than lose track of which timestamp is whose.
+        if (this.times && this.times.push(pts) > 120) this.times = null;
         return write.apply(this, arguments);
       };
       C.prototype.decode = function () {
@@ -449,18 +448,20 @@
         if (onHeaders) onHeaders(r.headers);
         self.progress = 1;
         var reader = r.body.getReader();
-        function next() {
-          return reader.read().then(function (x) {
+        // Each read starts the next without returning it: a returned one would chain
+        // every chunk's promise to the last, kept until the stream ends.
+        (function next() {
+          reader.read().then(function (x) {
             if (x.done) { self.completed = true; return; }
             self.established = true;
             if (self.destination) self.destination.write(x.value);
-            return next();
-          });
-        }
-        return next();
-      }).catch(function (err) {
+            next();
+          }, failed);
+        })();
+      }).catch(failed);
+      function failed(err) {
         if (err.name !== 'AbortError' && onFail) onFail(err);
-      });
+      }
     };
     FetchSource.prototype.resume = function () {};
     FetchSource.prototype.destroy = function () { this.ctl.abort(); };
