@@ -37,7 +37,9 @@ the browser into fullscreen with one tap.
   to Frunk.
 - **Rear screen.** Because the car treats that session as the YouTube Theater app,
   cars with a rear display offer **Join Front Display**. Rear passengers can keep
-  watching after the car shifts out of Park.
+  watching after the car shifts out of Park. A Watch Party doesn't need fullscreen:
+  its **Fullscreen** button goes there (and back into the party) when you want the
+  rear screen to join, or to watch fullscreen while parked.
 - **Tiles.** Logos and colors are filled in automatically from
   [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons) and
   [Simple Icons](https://simpleicons.org). You can also pick another logo or color.

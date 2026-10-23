@@ -50,10 +50,13 @@
   }
 
   // ---------- Top bar: Host / Join ----------
-  // In the car, a party only works in fullscreen (the rear screen and driving
-  // depend on it), so Host and Join go there first and come back.
-  const needsFullscreen = () => f.isTesla && !f.inFullscreen;
+  // In the car, fullscreen is a choice, not a step: for watching while parked, and
+  // so the rear screen can join (Join Front Display) and keep watching and
+  // controlling while the front is driving. The party screen's Fullscreen button
+  // goes there through YouTube's redirect and comes straight back into the party.
   const viaFullscreen = (query) => location.assign(`https://www.youtube.com/redirect?q=${encodeURIComponent(`${location.origin}/?fs=1&${query}`)}`);
+  $("partyFullscreen").hidden = !(f.isTesla && !f.inFullscreen);
+  $("partyFullscreen").onclick = () => session && viaFullscreen(`party=${encodeURIComponent(session.code)}`);
 
   function renderBar() {
     const mine = lobby.find((p) => p.mine);
@@ -68,7 +71,7 @@
     $("partyHostBtn").hidden = !me || !!session || !!mine || !sources.length;
   }
 
-  $("partyHostBtn").onclick = () => (needsFullscreen() ? viaFullscreen("host=1") : host());
+  $("partyHostBtn").onclick = () => host();
   $("partyJoinBtn").onclick = () => {
     const mine = lobby.find((p) => p.mine);
     const others = lobby.filter((p) => !p.mine);
@@ -76,7 +79,6 @@
     openPartyList();
   };
   function joinFlow(code) {
-    if (needsFullscreen()) return viaFullscreen(`party=${encodeURIComponent(code)}`);
     return join(code);
   }
 
@@ -287,7 +289,6 @@
   // A party link or code opened signed out: a name, and in as a guest of that
   // one party (if the host allows guests, maybe after asking).
   async function guestFlow(code) {
-    if (needsFullscreen()) return viaFullscreen(`party=${encodeURIComponent(code)}`);
     let info;
     try {
       info = await f.api(`/api/party/${encodeURIComponent(code)}/info`);
