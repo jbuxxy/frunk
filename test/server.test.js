@@ -299,10 +299,27 @@ test("admins send one of their tiles to other people's pages", async (t) => {
   assert.equal(theirs.at(-1).url, add.url);
   assert.notEqual(theirs.at(-1).id, mine[0].id);
 
+  // They're told (from /api/me at sign-in, and /api/me/shared when Frunk comes
+  // back on screen) until they acknowledge it; the sender isn't.
+  const told = { tile: theirs.at(-1).id, name: "FSP", from: people.users.find((u) => u.id === ownerId).name };
+  assert.deepEqual((await srv.request("GET", "/api/me", { cookie: member })).body.user.shared, [told]);
+  assert.deepEqual((await srv.request("GET", "/api/me/shared", { cookie: member })).body.shared, [told]);
+  assert.deepEqual((await srv.request("GET", "/api/me", { cookie: admin })).body.user.shared, []);
+  assert.equal((await srv.request("POST", "/api/me/shared/ack", { cookie: member, body: {} })).status, 200);
+  assert.deepEqual((await srv.request("GET", "/api/me/shared", { cookie: member })).body.shared, []);
+  assert.equal((await srv.request("GET", "/api/me/shared")).status, 401);
+
   // Sending it again doesn't duplicate it.
   const again = await send({ tile: mine[0].id, to: [memberId] });
   assert.deepEqual([again.body.sent.length, again.body.had.length], [0, 1]);
   assert.equal((await srv.request("GET", "/api/sites", { cookie: member })).body.length, before + 1);
+
+  // A tile they removed before seeing the notice drops out of it.
+  await srv.request("PUT", "/api/sites", { cookie: member, body: theirs.slice(0, -1) });
+  assert.equal((await send({ tile: mine[0].id, to: [memberId] })).body.sent.length, 1);
+  const resent = (await srv.request("GET", "/api/sites", { cookie: member })).body;
+  await srv.request("PUT", "/api/sites", { cookie: member, body: resent.slice(0, -1) });
+  assert.deepEqual((await srv.request("GET", "/api/me/shared", { cookie: member })).body.shared, []);
 
   // Only tiles from your own page, and someone to send to.
   assert.equal((await send({ tile: theirs.at(-1).id, to: [memberId] })).status, 400);
@@ -415,6 +432,12 @@ test("watch party: hosting, joining, who controls what", async (t) => {
   await post(`/api/party/${code}/settings`, admin, { member: host.member, mode: "copilots", copilots: [guest.member] });
   assert.deepEqual((await guestEvents.next()).party.you, { host: false, guest: false, control: true, choose: true });
   assert.equal((await srv.request("GET", `/api/party/${code}/sources/${guest.member}`, { cookie: member })).body[0].id, "test");
+  assert.equal((await control(member, guest.member, { action: "pause", position: 3 })).status, 200, "a co-pilot can pause");
+  const coPaused = await guestEvents.next();
+  assert.equal(coPaused.party.people.find((p) => p.name === "Member").copilot, true);
+  // Unpicked: back to watching.
+  await post(`/api/party/${code}/settings`, admin, { member: host.member, copilots: [] });
+  assert.deepEqual((await guestEvents.next()).party.you, { host: false, guest: false, control: false, choose: false });
 
   // Only the host can end it; everyone is told, and it leaves the lobby.
   assert.equal((await post(`/api/party/${code}/end`, member)).status, 400);

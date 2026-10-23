@@ -75,7 +75,7 @@
       <div class="party-title" id="partyTitle"></div>
       <div class="party-people" id="partyPeople"></div>
       <button class="pill party-code" id="partyInviteBtn" aria-label="Invite people">Code <b id="partyCode"></b></button>
-      <button class="icon-btn" id="partySettingsBtn" aria-label="Who can control playback">
+      <button class="icon-btn" id="partySettingsBtn" aria-label="Party settings">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
       </button>
       <button class="icon-btn party-chat-btn" id="partyChatBtn" aria-label="Chat">
@@ -206,6 +206,18 @@
       <div class="menu">
         <button type="button" class="pill accent" id="sendGo" disabled>Send</button>
         <button type="button" class="pill" data-close>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- A tile an admin sent you -->
+  <dialog class="sheet narrow" id="sharedDialog">
+    <form method="dialog">
+      <h2 id="sharedTitle"></h2>
+      <div class="shared-tiles" id="sharedTiles"></div>
+      <p class="hint" id="sharedHint"></p>
+      <div class="menu">
+        <button type="button" class="pill accent" id="sharedOk">Got it</button>
       </div>
     </form>
   </dialog>

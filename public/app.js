@@ -20,6 +20,7 @@
   const params = new URLSearchParams(location.search);
 
   let sites = [];
+  let shared = []; // tiles an admin sent you that you haven't acknowledged: { tile, name, from }
   let editing = false;
   let editingId = null;
 
@@ -290,6 +291,11 @@
       name.className = "name";
       name.textContent = site.name;
       tile.append(name);
+      // Sent by an admin and not acknowledged yet.
+      if (shared.some((s) => s.tile === site.id)) {
+        tile.classList.add("is-new");
+        tile.append(Object.assign(document.createElement("span"), { className: "new-badge", textContent: "New" }));
+      }
       // In a Watch Party: apps that can play in it get a badge, the rest dim.
       const partyState = frunk.party && frunk.party.tileState(site);
       if (partyState === "locked") tile.classList.add("locked");
@@ -1537,6 +1543,56 @@
     await save(next);
   };
 
+  // ---------- Tiles an admin sent you ----------
+  // Shown on the home screen until Got it: at sign-in, and again whenever Frunk
+  // comes back on screen (from an app in another tab, or the car's Back), so a
+  // tile sent while you're signed in shows up without signing in again.
+  function showShared() {
+    if (!shared.length || editing || !$("party").hidden || document.querySelector("dialog[open]")) return;
+    $("sharedTitle").textContent = `${nameList([...new Set(shared.map((s) => s.from))])} shared ${nameList(shared.map((s) => s.name))} with you`;
+    $("sharedTiles").replaceChildren(...shared.map((s) => sites.find((x) => x.id === s.tile)).filter(Boolean).map((site) => {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.append(tileArt(site, paintCard(tile, site), tile));
+      tile.append(Object.assign(document.createElement("span"), { className: "name", textContent: site.name }));
+      return tile;
+    }));
+    $("sharedHint").textContent = shared.length > 1
+      ? "They're at the end of your page. Move or remove them like any tile."
+      : "It's at the end of your page. Move or remove it like any tile.";
+    $("sharedDialog").showModal();
+  }
+  // Only Got it closes it (not Escape), so it's there next time otherwise.
+  $("sharedDialog").addEventListener("cancel", (e) => e.preventDefault());
+  $("sharedOk").onclick = () => pressed($("sharedOk"), async () => {
+    await api("/api/me/shared/ack", { method: "POST" });
+    shared = [];
+    $("sharedDialog").close();
+    render();
+  });
+  let checkingShared = false;
+  async function checkShared() {
+    if (!me.user || checkingShared || document.hidden || editing) return;
+    checkingShared = true;
+    try {
+      const r = await api("/api/me/shared");
+      // A tile that arrived after the page loaded: fetch the page's tiles again.
+      if (r.shared.some((s) => !sites.some((x) => x.id === s.tile))) sites = await api("/api/sites");
+      const changed = r.shared.map((s) => s.tile).join() !== shared.map((s) => s.tile).join();
+      shared = r.shared;
+      if (changed) render();
+      showShared();
+    } catch {
+      // Offline or signed out meanwhile: try again next time.
+    } finally {
+      checkingShared = false;
+    }
+  }
+  document.addEventListener("visibilitychange", checkShared);
+  addEventListener("pageshow", (e) => e.persisted && checkShared());
+  addEventListener("focus", checkShared);
+  setInterval(checkShared, 60_000);
+
   // ---------- Shared with party.js (Watch Party) ----------
   const frunk = (window.frunk = {
     api, toast, pressed, paintAvatar, loadQr, copyText, launch, render, openSignIn,
@@ -1552,12 +1608,14 @@
     // Not mid-way through approving a car or an invite; it'll ask next visit.
     const busy = location.pathname === "/pair" || /[?&](pair|invite|open|party)=/.test(location.search) || store.sget("frunk-pair");
     if (me.user && me.user.pickColor && !busy) openAvatarPicker(true);
+    shared = (me.user && me.user.shared) || [];
     try {
       sites = await api("/api/sites");
       render();
     } catch {
       toast("Couldn't load your sites");
     }
+    if (!busy) showShared();
     // Back from the fullscreen trip started by tapping a tile: open that tile.
     const pending = openAfterFullscreen && sites.find((x) => x.id === openAfterFullscreen);
     if (pending) return location.assign(pending.url);

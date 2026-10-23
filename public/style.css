@@ -763,3 +763,23 @@ dialog.party-pick { width: min(980px, calc(100vw - 32px)); }
   .party-bubble:nth-last-child(3 of .party-bubble) { bottom: 470px; }
   .party-float { bottom: 360px; }
 }
+
+/* A tile an admin sent you, until you've tapped Got it */
+.tile.is-new { box-shadow: inset 0 0 0 3px #e5a00d, 0 10px 30px rgba(0,0,0,.35); }
+.tile .new-badge {
+  position: absolute; top: 12px; left: 12px;
+  padding: 4px 10px; border-radius: 999px;
+  background: #e5a00d; color: #111;
+  font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+}
+.shared-tiles { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin: 6px 0 2px; }
+.shared-tiles .tile { width: min(240px, 100%); }
+.shared-tiles .tile .name { left: 16px; bottom: 12px; font-size: 17px; }
+
+/* Party settings: a note under a choice, and the co-pilots to pick */
+.choice-note { margin: -12px 0 20px; }
+.copilot-pick { margin: -8px 0 22px; max-height: none; }
+.copilot-pick .send-person { min-height: 60px; }
+.copilot-pick .send-person:disabled { opacity: .5; cursor: default; }
+.copilot-pick .send-person:disabled .send-check { visibility: hidden; }
+.copilot-pick .person-name { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; }

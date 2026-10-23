@@ -271,6 +271,18 @@ function createAccounts({ dataDir, ownerEmail }) {
     save();
   }
 
+  // Tiles an admin sent this person: { tile, name, from, at }, kept until they've
+  // seen the notice (ackSharedTiles).
+  function addSharedTile(user, entry) {
+    user.sharedTiles = [...(user.sharedTiles || []), entry];
+    save();
+  }
+  function ackSharedTiles(user) {
+    if (!user.sharedTiles) return;
+    delete user.sharedTiles;
+    save();
+  }
+
   // A connected app (Watch Party): { token, account }, or null to disconnect.
   function setApp(user, id, conn) {
     user.apps ||= {};
@@ -284,7 +296,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   return {
     ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
-    people, deleteUser, setSites, setName, setAvatarColor, setApp, allUsers,
+    people, deleteUser, setSites, setName, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles,
   };
 }
 

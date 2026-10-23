@@ -118,13 +118,16 @@
   // ---------- Party choices: who can join, who controls ----------
   // The same choices make up the setup sheet (before hosting) and the party's
   // settings (sliders icon). values: { accounts, guests, mode }.
+  // Guests: people without a Frunk account. Co-pilots: people the host picks
+  // who can also play, pause, skip and choose what plays.
   const CHOICES = [
-    { key: "accounts", label: "People with a Frunk account", options: [["open", "Join right away"], ["ask", "Ask me first"]] },
-    { key: "guests", label: "People without an account", options: [["no", "Can't join"], ["ask", "Ask me first"], ["open", "Join right away"]] },
-    { key: "mode", label: "Who can control playback", options: [["host", "Only me"], ["everyone", "Everyone: play, pause, skip"], ["copilots", "Co-pilots I pick"]] },
+    { key: "accounts", label: "Frunk accounts", options: [["open", "Join"], ["ask", "Ask me"]] },
+    { key: "guests", label: "Guests", options: [["no", "Blocked"], ["ask", "Ask me"], ["open", "Join"]] },
+    { key: "mode", label: "Controls playback", options: [["host", "Me"], ["everyone", "Everyone"], ["copilots", "Co-pilots"]] },
   ];
   const DEFAULT_CHOICES = { accounts: "open", guests: "ask", mode: "host" };
-  function renderChoices(box, values, onPick) {
+  // after: { key: () => elements } shown right under that choice's row.
+  function renderChoices(box, values, onPick, after = {}) {
     box.replaceChildren(...CHOICES.flatMap(({ key, label, options }) => {
       const title = Object.assign(document.createElement("div"), { className: "field-label", textContent: label });
       const row = document.createElement("div");
@@ -137,9 +140,10 @@
         b.onclick = () => onPick(key, value);
         row.append(b);
       }
-      return [title, row];
+      return [title, row, ...(after[key] ? after[key]() : [])];
     }));
   }
+  const hintEl = (text) => Object.assign(document.createElement("p"), { className: "hint choice-note", textContent: text });
 
   // ---------- Hosting and joining ----------
   // Hosting starts with the setup sheet; Frunk remembers the choices.
@@ -148,6 +152,8 @@
     const paint = () => renderChoices($("partySetupChoices"), values, (key, value) => {
       values = { ...values, [key]: value };
       paint();
+    }, {
+      mode: () => (values.mode === "copilots" ? [hintEl("Pick them in Party settings once they've joined. Co-pilots need a Frunk account.")] : []),
     });
     paint();
     $("partySetupStart").onclick = () => f.pressed($("partySetupStart"), async () => {
@@ -1023,10 +1029,13 @@
   };
 
   // ---------- Party settings (host) ----------
-  // Who can join and control, and the people here: make co-pilot, remove.
+  // Who can join and control; with Co-pilots, the people to pick right under it.
+  // Then the people here, to remove.
   function renderSettings() {
     renderChoices($("partySettingsChoices"), { ...party.access, mode: party.mode }, (key, value) =>
-      saveSettings(key === "mode" ? { mode: value } : { access: { [key]: value } }));
+      saveSettings(key === "mode" ? { mode: value } : { access: { [key]: value } }), {
+      mode: () => (party.mode === "copilots" ? [copilotPicker()] : []),
+    });
     const others = party.people.filter((p) => !p.host);
     $("partyPeopleList").replaceChildren(...(others.length ? others.map((p) => {
       const row = document.createElement("div");
@@ -1035,15 +1044,8 @@
       name.className = "party-person-name";
       name.append(dot(p), p.name);
       if (p.guest) name.append(Object.assign(document.createElement("span"), { className: "party-tag", textContent: "guest" }));
+      else if (party.mode === "copilots" && p.copilot) name.append(Object.assign(document.createElement("span"), { className: "party-tag", textContent: "co-pilot" }));
       row.append(name);
-      if (party.mode === "copilots" && !p.guest) {
-        const co = document.createElement("button");
-        co.type = "button";
-        co.className = `pill small${p.copilot ? " on" : ""}`;
-        co.textContent = p.copilot ? "Co-pilot ✓" : "Make co-pilot";
-        co.onclick = () => saveSettings({ copilots: others.filter((g) => (g === p ? !g.copilot : g.copilot)).map((g) => g.id) });
-        row.append(co);
-      }
       const out = document.createElement("button");
       out.type = "button";
       out.className = "pill small danger";
@@ -1054,6 +1056,34 @@
       row.append(out);
       return row;
     }) : [Object.assign(document.createElement("p"), { className: "hint", textContent: "Nobody else has joined yet." })]));
+  }
+  // Everyone here as a big toggle; guests shown but greyed (co-pilots need an account).
+  function copilotPicker() {
+    const others = party.people.filter((p) => !p.host);
+    const eligible = others.filter((p) => !p.guest);
+    const box = document.createElement("div");
+    box.className = "send-people copilot-pick";
+    if (!eligible.length) {
+      box.append(hintEl("Co-pilots are picked from people here with a Frunk account. Nobody like that has joined yet."));
+    }
+    for (const p of others) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "send-person";
+      b.disabled = p.guest;
+      b.setAttribute("aria-pressed", String(!!p.copilot));
+      const text = document.createElement("span");
+      text.className = "send-person-text";
+      const name = document.createElement("span");
+      name.className = "person-name";
+      name.append(dot(p), p.name);
+      text.append(name);
+      if (p.guest) text.append(Object.assign(document.createElement("span"), { className: "hint", textContent: "Guest · needs a Frunk account" }));
+      b.append(text, Object.assign(document.createElement("span"), { className: "send-check" }));
+      b.onclick = () => saveSettings({ copilots: eligible.filter((g) => (g === p ? !g.copilot : g.copilot)).map((g) => g.id) });
+      box.append(b);
+    }
+    return box;
   }
   async function saveSettings(body) {
     try {

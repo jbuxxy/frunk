@@ -798,10 +798,15 @@ function on(method, pattern, access, handler) {
 }
 
 const publicUser = (user) => ({ name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null });
+// Tiles sent to this person that they haven't acknowledged yet, minus any
+// they've already removed from their page.
+const sharedWith = (user) => (user.sharedTiles || [])
+  .filter((s) => user.sites.some((x) => x.id === s.tile))
+  .map(({ tile, name, from }) => ({ tile, name, from }));
 
 // ---------- Sign-in ----------
 on("GET", "/api/me", "anyone", ({ res, user }) => json(res, 200, {
-  user: user && { ...publicUser(user), pickColor: !!user.pickColor },
+  user: user && { ...publicUser(user), pickColor: !!user.pickColor, shared: sharedWith(user) },
   google: !!(GOOGLE_ID && GOOGLE_SECRET),
   googleClientId: GOOGLE_ID || undefined,
   version: APP_VERSION,
@@ -874,6 +879,12 @@ on("POST", "/api/signup", "anyone", async ({ req, res }) => {
   const result = await accounts.acceptInvite(String(token || ""), { name, password: String(password || ""), avatarColor }, readSites());
   if (result.error) return json(res, 400, { error: result.error });
   startSession(res, req, result.user);
+  return json(res, 200, { ok: true });
+});
+// Checked again whenever Frunk comes back on screen, so a tile sent meanwhile shows up.
+on("GET", "/api/me/shared", "user", ({ res, user }) => json(res, 200, { shared: sharedWith(user) }));
+on("POST", "/api/me/shared/ack", "user", ({ res, user }) => {
+  accounts.ackSharedTiles(user);
   return json(res, 200, { ok: true });
 });
 on("PUT", "/api/me", "user", async ({ req, res, user }) => {
@@ -1032,7 +1043,8 @@ on("DELETE", "/api/admin/users/:id", "admin", ({ res, params }) => {
 });
 // Copy one of the admin's own tiles onto other people's pages, at the end.
 // Anyone who already has a tile for that address is skipped (had), as is a
-// page already at the 200-tile limit (full).
+// page already at the 200-tile limit (full). Each person is told the next time
+// they're on Frunk's home screen.
 on("POST", "/api/admin/send-tile", "admin", async ({ req, res, user }) => {
   const { tile, to } = (await readBody(req)) || {};
   const site = user.sites.find((s) => s.id === tile);
@@ -1046,7 +1058,9 @@ on("POST", "/api/admin/send-tile", "admin", async ({ req, res, user }) => {
     if (target.sites.some((s) => s.url === site.url)) result.had.push(label);
     else if (target.sites.length >= 200) result.full.push(label);
     else {
-      accounts.setSites(target, [...target.sites, { ...site, id: crypto.randomUUID() }]);
+      const copy = { ...site, id: crypto.randomUUID() };
+      accounts.setSites(target, [...target.sites, copy]);
+      accounts.addSharedTile(target, { tile: copy.id, name: site.name, from: user.name || user.email, at: Date.now() });
       result.sent.push(label);
     }
   }
