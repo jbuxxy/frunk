@@ -38,30 +38,20 @@ window.frunkCar = (() => {
   let steppedAt = 0;
   // A quiet note for the Car check page in FSP (the owner's): how this car plays,
   // after its first minute (once per car) and when it steps down.
-  let noteStart = 0;
-  let noteFrames = 0;
+  let noteStart = 0; // this stream's first picture
   let noted = false;
-  function gpuName() {
-    try {
-      const gl = document.createElement("canvas").getContext("webgl");
-      const ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
-      return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : null;
-    } catch {
-      return null;
-    }
-  }
   function carNote(why) {
     if (!base || !info) return;
     if (why === "first minute" && keep.get("frunk-carnote")) return;
     const secs = noteStart ? (Date.now() - noteStart) / 1000 : 0;
     const ctx = player && player.audioOut && player.audioOut.context;
     const note = {
-      why, ua: navigator.userAgent, gpu: gpuName(), tier: window.H264 ? window.H264.carTier() : null,
+      why, ua: navigator.userAgent, gpu: window.H264 ? window.H264.gpuName() : null, tier: window.H264 ? window.H264.carTier() : null,
       cores: navigator.hardwareConcurrency || null, decoder: codec === "h264" ? backend : "mpeg1", codec, quality,
-      sourceFps: info.fps || null, fps: secs ? +(noteFrames / secs).toFixed(1) : 0, seconds: Math.round(secs),
+      sourceFps: info.fps || null, fps: secs ? +(frames / secs).toFixed(1) : 0, seconds: Math.round(secs),
       sound: ctx ? ctx.state : "none",
     };
-    fetch(`${base}/note`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(note), credentials: "same-origin", keepalive: true }).catch(() => {});
+    f.api(`${base}/note`, { method: "POST", body: JSON.stringify(note), keepalive: true }).catch(() => {});
     if (why === "first minute") keep.set("frunk-carnote", "1");
   }
   function stepDown() {
@@ -131,6 +121,7 @@ window.frunkCar = (() => {
   let openedAt = 0;
   let lastFrame = 0;
   let retryAt = 0; // after a failed start, wait before trying again
+  let rejoinedAt = 0; // when this car last rejoined the shared stream to catch up
   let ready = false; // load() has picked the codec and quality; no stream before that
 
   function stop(keepPicture) {
@@ -164,7 +155,6 @@ window.frunkCar = (() => {
     joinPos = 0;
     frames = 0;
     noteStart = 0;
-    noteFrames = 0;
     const me = canvas;
     const url = `${base}/stream?codec=${codec}&q=${quality}${solo ? `&solo=${Math.random().toString(36).slice(2, 10)}` : ""}`;
     const Source = fetchSource(
@@ -186,7 +176,6 @@ window.frunkCar = (() => {
         if (canvas !== me) return;
         frames++;
         lastFrame = Date.now();
-        noteFrames++;
         noteStart ||= lastFrame;
         if (!noted && lastFrame - noteStart > 60_000) {
           noted = true;
@@ -263,16 +252,16 @@ window.frunkCar = (() => {
         if (now >= retryAt && now - openedAt > 1000) open(false);
         return;
       }
-      if (!frames) {
-        if (now - openedAt > 20_000) { stop(true); open(true); } // never got going
-        return;
-      }
-      if (now - lastFrame > 10_000) { stop(true); open(true); return; } // stalled
-      // Out of step with the party (a long stall, a slow join): catch up on its own.
-      if (now - openedAt > 8000 && Math.abs(car.currentTime - want) > 3) {
-        stop(true);
-        open(true);
-      }
+      const stuck = frames ? now - lastFrame > 10_000 : now - openedAt > 20_000; // stalled, or never got going
+      const adrift = frames && now - openedAt > 8000 && Math.abs(car.currentTime - want) > 3; // out of step
+      if (!stuck && !adrift) return;
+      // First, rejoin the party's shared stream (an H.264 car starts at its last
+      // keyframe, within a second of everyone). Only if that didn't do it, a catch-up
+      // stream of its own, which costs FSP a whole extra encode.
+      const solo = now - rejoinedAt < 30_000;
+      rejoinedAt = solo ? 0 : now;
+      stop(true);
+      open(solo);
     },
     unlock() {
       const out = player && player.audioOut;

@@ -781,7 +781,9 @@ function serveStatic(req, res, pathname) {
     res.writeHead(200, {
       ...SECURITY_HEADERS,
       "content-type": MIME[ext] || "application/octet-stream",
-      "cache-control": ext === ".html" ? "no-cache" : "public, max-age=300",
+      // ?v= is the build: that file never changes, so the car keeps it instead of
+      // fetching the players (hls.js, JSMpeg, the decoder) again every few minutes.
+      "cache-control": ext === ".html" ? "no-cache" : /[?&]v=/.test(req.url) ? "public, max-age=31536000, immutable" : "public, max-age=300",
     });
     res.end(buf);
   });
@@ -1062,8 +1064,7 @@ on("POST", "/api/admin/send-tile", "admin", async ({ req, res, user }) => {
     else if (target.sites.length >= 200) result.full.push(label);
     else {
       const copy = { ...site, id: crypto.randomUUID() };
-      accounts.setSites(target, [...target.sites, copy]);
-      accounts.addSharedTile(target, { tile: copy.id, name: site.name, from: user.name || user.email, at: Date.now() });
+      accounts.addSharedTile(target, copy, { tile: copy.id, name: site.name, from: user.name || user.email, at: Date.now() });
       result.sent.push(label);
     }
   }
@@ -1080,14 +1081,14 @@ const TEST_ITEMS = [{ id: "bbb", title: "Big Buck Bunny", subtitle: "Test stream
 const apps = createApps(process.env);
 const userById = (id) => accounts.allUsers().find((u) => u.id === id) || null;
 // An app's key for this person; FSP uses their Plex one (apps.js createFsp).
-const tokenFor = (userId, appId) => userById(userId)?.apps?.[apps.byId(appId)?.via || appId]?.token || null;
+const tokenFor = (userId, appId) => userById(userId)?.apps?.[apps.connectionOf(appId)]?.token || null;
 // The picker's tab icon for an app.
 const sourceIcon = (a) => (a.icon ? `/api/party/source-icon/${a.id}` : a.dash ? `/api/dash/${a.dash}` : null);
 const parties = createParties({
   sourcesFor(userId) {
     const user = userById(userId);
     if (!user) return [];
-    const connected = apps.list.filter((a) => user.apps?.[a.via || a.id]).map((a) => ({ id: a.id, name: a.name, hosts: a.hosts, icon: sourceIcon(a) }));
+    const connected = apps.list.filter((a) => user.apps?.[apps.connectionOf(a.id)]).map((a) => ({ id: a.id, name: a.name, hosts: a.hosts, icon: sourceIcon(a) }));
     return [...connected, ...(user.admin ? [TEST_SOURCE] : [])];
   },
   async browse(userId, sourceId, q, folder) {
@@ -1107,25 +1108,19 @@ const parties = createParties({
     const u = userById(userId);
     return u && { name: u.name || u.email, color: u.avatarColor || null };
   },
-  carFor: (sourceId, kind) => !!FSP && ["plex", "fsp"].includes(sourceId) && kind === "video",
+  carFor: (sourceId, kind) => !!apps.byId(sourceId)?.car && kind === "video",
 });
 
 // ---------- Watch Party in the car ----------
 // The Tesla pauses any <video> while driving, so with FSP_URL set, a Plex party
-// plays in the car through FSP instead: it turns the title into MPEG-1 that
-// public/car.js draws on a canvas, one stream per party shared by every car in it.
-// Frunk asks with the host's own Plex key, as for the regular stream.
-const FSP = process.env.FSP_URL && process.env.FSP_SECRET
-  ? { base: process.env.FSP_URL.replace(/\/$/, ""), secret: process.env.FSP_SECRET }
-  : null;
-const fsp = (path, token, signal) => fetch(`${FSP.base}${path}`, {
-  headers: { authorization: `Bearer ${FSP.secret}`, "x-plex-token": token || "" },
-  signal,
-});
+// plays in the car through FSP instead: it turns the title into H.264 (or MPEG-1)
+// that public/car.js draws on a canvas, one stream per party shared by every car in
+// it. Frunk asks with the host's own Plex key, as for the regular stream.
+const partner = apps.partner;
 
 // Connected apps: each person's own account on the configured servers, by
 // pasting a key ("key") or entering a code at the app's own site ("link").
-on("GET", "/api/apps", "user", ({ res, user }) => json(res, 200, apps.list.filter((a) => !a.via).map((a) => ({
+on("GET", "/api/apps", "user", ({ res, user }) => json(res, 200, apps.connections.map((a) => ({
   id: a.id, name: a.name, connect: a.connect, help: a.help || null, linkAt: a.linkAt || null, host: a.hosts[0],
   connected: !!user.apps?.[a.id], account: user.apps?.[a.id]?.account || null,
 }))));
@@ -1265,11 +1260,11 @@ on("GET", "/api/party/:code/stream/:load/:file", "party", async ({ req, res, par
   body.pipe(res);
 });
 on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who }) => {
-  const c = FSP && parties.carFor(params.code, who, params.load);
+  const c = partner && parties.carFor(params.code, who, params.load);
   if (!c) return json(res, 404, { error: "not found" });
   let r;
   try {
-    r = await fsp(`/partner/info?id=${encodeURIComponent(c.id)}`, tokenFor(c.hostId, c.source), AbortSignal.timeout(15_000));
+    r = await partner.call(`/partner/info?id=${encodeURIComponent(c.id)}`, tokenFor(c.hostId, c.source));
   } catch {
     return json(res, 502, { error: "FSP didn't answer." });
   }
@@ -1282,7 +1277,7 @@ on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who 
 const CAR_NOTE_FIELDS = ["why", "ua", "gpu", "tier", "cores", "decoder", "codec", "quality", "sourceFps", "fps", "seconds", "sound"];
 const carNotes = new Map(); // who -> last note time
 on("POST", "/api/party/:code/car/:load/note", "party", async ({ req, res, params, who }) => {
-  const c = FSP && parties.carFor(params.code, who, params.load);
+  const c = partner && parties.carFor(params.code, who, params.load);
   if (!c) return json(res, 404, { error: "Nothing is playing in the car." });
   if (Date.now() - (carNotes.get(who) || 0) < 60_000) return json(res, 429, { error: "Too many notes." });
   carNotes.set(who, Date.now());
@@ -1294,17 +1289,12 @@ on("POST", "/api/party/:code/car/:load/note", "party", async ({ req, res, params
     else if ((typeof v === "number" && Number.isFinite(v)) || v === null) note[k] = v;
   }
   try {
-    await fetch(`${FSP.base}/partner/note`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${FSP.secret}`, "x-plex-token": tokenFor(c.hostId, c.source) || "", "content-type": "application/json" },
-      body: JSON.stringify(note),
-      signal: AbortSignal.timeout(10_000),
-    });
+    await partner.call("/partner/note", tokenFor(c.hostId, c.source), { method: "POST", body: note, signal: AbortSignal.timeout(10_000) });
   } catch {}
   return json(res, 200, { ok: true });
 });
 on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, params, who }) => {
-  const c = FSP && parties.carFor(params.code, who, params.load);
+  const c = partner && parties.carFor(params.code, who, params.load);
   if (!c || !c.playing) return json(res, 404, { error: "not found" });
   // solo: a car that fell out of step gets its own catch-up stream instead of the shared one.
   const solo = /^[a-z0-9]{1,16}$/.test(url.searchParams.get("solo") || "") ? `:${url.searchParams.get("solo")}` : "";
@@ -1317,7 +1307,7 @@ on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, 
     const codec = url.searchParams.get("codec") === "h264" ? "h264" : "mpeg1";
     const quality = ["360", "480", "720"].includes(url.searchParams.get("q")) ? url.searchParams.get("q") : "720";
     const q = new URLSearchParams({ id: c.id, key: c.segment + solo, pos: c.position.toFixed(2), codec, q: quality });
-    r = await fsp(`/partner/party?${q}`, tokenFor(c.hostId, c.source), ctl.signal);
+    r = await partner.call(`/partner/party?${q}`, tokenFor(c.hostId, c.source), { signal: ctl.signal });
   } catch {
     return res.headersSent || json(res, 502, { error: "FSP didn't answer." });
   } finally {

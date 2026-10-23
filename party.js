@@ -90,7 +90,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
   // Push-to-talk. Everyone always hears; this is who may speak.
   function canTalk(p, userId) {
     if (p.talk === "nobody") return false;
-    if (p.talk === "pilots") return userId === p.hostId || (p.mode === "copilots" && p.copilots.has(userId));
+    if (p.talk === "pilots") return canChoose(p, userId);
     if (p.talk === "accounts") return !isGuest(userId);
     return true;
   }
@@ -137,22 +137,24 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       return { code: p.code, host: { name: host.name, color: host.color }, title: p.media ? p.media.title : null, people: people(p).length, mine: p.hostId === userId };
     });
   }
-  // To every open page in the party, except (optionally) one person's own.
-  function toAll(p, msg, exceptUser) {
-    for (const m of p.members.values()) if (m.userId !== exceptUser) for (const res of m.streams) send(res, msg);
+  // To every open page in the party that keep(member) allows, serialized once (voice
+  // goes out five times a second).
+  function toAll(p, msg, keep = () => true) {
+    const line = `data: ${JSON.stringify(msg)}\n\n`;
+    for (const m of p.members.values()) if (keep(m)) for (const res of m.streams) res.write(line);
   }
+  const isHere = (p, userId) => !!p && [...p.members.values()].some((m) => m.userId === userId);
   // The talk button let go, timed out, or the talker gone or no longer allowed.
-  function releaseFloor(p) {
-    if (!p.floor) return;
+  // memberId: only if that's who has it.
+  function releaseFloor(p, memberId) {
+    if (!p.floor || (memberId && p.floor.memberId !== memberId)) return;
     clearTimeout(p.floor.timer);
     const member = p.floor.memberId;
     p.floor = null;
     toAll(p, { type: "talk-end", member });
   }
   // To the host's open pages: someone asking to join, or that being settled.
-  function toHost(p, msg) {
-    for (const m of p.members.values()) if (m.userId === p.hostId) for (const res of m.streams) send(res, msg);
-  }
+  const toHost = (p, msg) => toAll(p, msg, (m) => m.userId === p.hostId);
   const knock = (r) => ({ id: r.id, name: r.name, guest: r.guest });
 
   function lobbyUpdate() {
@@ -193,7 +195,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       for (const [id, m] of p.members) {
         if (!m.streams.size && now - m.lastSeen > MEMBER_GONE_MS) {
           p.members.delete(id);
-          if (p.floor && p.floor.memberId === id) releaseFloor(p);
+          releaseFloor(p, id);
           changed = true;
         }
       }
@@ -444,7 +446,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       if (!memberOf(p, memberId, userId)) return;
       for (const res of p.members.get(memberId).streams) res.end();
       p.members.delete(memberId);
-      if (p.floor && p.floor.memberId === memberId) releaseFloor(p);
+      releaseFloor(p, memberId);
       broadcast(p, { kind: "left", by: who(p, userId).name });
     },
 
@@ -482,7 +484,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
         msg = { type: "chat", message };
       }
       p.sent.set(key, [...recent, now]);
-      for (const m of p.members.values()) for (const res of m.streams) send(res, msg);
+      toAll(p, msg);
       return null;
     },
 
@@ -507,11 +509,11 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
       if (action === "audio") {
         if (!p.floor || p.floor.memberId !== memberId) return "Hold the talk button first.";
         if (typeof data !== "string" || !data || data.length > TALK_CHUNK_MAX || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return "Bad audio.";
-        toAll(p, { type: "talk", member: memberId, seq: Number(seq) || 0, data }, userId);
+        toAll(p, { type: "talk", member: memberId, seq: Number(seq) || 0, data }, (m) => m.userId !== userId);
         return null;
       }
       if (action === "end") {
-        if (p.floor && p.floor.memberId === memberId) releaseFloor(p);
+        releaseFloor(p, memberId);
         return null;
       }
       return "Unknown action.";
@@ -535,7 +537,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
     // one's files), or a cover from one of the host's apps.
     streamFor(code, userId, load) {
       const p = find(code);
-      const here = p && [...p.members.values()].some((m) => m.userId === userId);
+      const here = isHere(p, userId);
       return here && p.stream && String(p.loads) === String(load) ? p.stream : null;
     },
     // What the car player streams, for someone in the party: the title, whose key
@@ -543,7 +545,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
     // every play, pause or seek so all the cars share one stream until then.
     carFor(code, userId, load) {
       const p = find(code);
-      const here = p && [...p.members.values()].some((m) => m.userId === userId);
+      const here = isHere(p, userId);
       if (!here || !p.media || !p.media.car || String(p.loads) !== String(load)) return null;
       return {
         hostId: p.hostId, source: p.media.source, id: p.media.id, playing: p.playing,
@@ -552,7 +554,7 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
     },
     artFor(code, userId, sourceId, itemId, opts) {
       const p = find(code);
-      const here = p && [...p.members.values()].some((m) => m.userId === userId);
+      const here = isHere(p, userId);
       if (!here || !sourcesFor(p.hostId).some((s) => s.id === sourceId)) return null;
       return art(p.hostId, sourceId, itemId, opts);
     },

@@ -110,6 +110,7 @@ window.frunkTalk = (() => {
     async start(send) {
       const m = await openMic();
       onChunk = (bytes) => send(base64(bytes));
+      m.node.port.postMessage("live");
       return m;
     },
     // Sends what's left of the last chunk; the mic closes a little later.

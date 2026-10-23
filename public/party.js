@@ -83,12 +83,9 @@
   $("partyJoinBtn").onclick = () => {
     const mine = lobby.find((p) => p.mine);
     const others = lobby.filter((p) => !p.mine);
-    if (mine || others.length === 1) return joinFlow((mine || others[0]).code);
+    if (mine || others.length === 1) return join((mine || others[0]).code);
     openPartyList();
   };
-  function joinFlow(code) {
-    return join(code);
-  }
 
   function openPartyList() {
     const list = $("partyList");
@@ -99,7 +96,7 @@
       b.append(dot(p.host), `${p.host.name}${p.title ? ` · ${p.title}` : ""}`);
       b.onclick = () => {
         $("partyListDialog").close();
-        joinFlow(p.code);
+        join(p.code);
       };
       return b;
     }));
@@ -551,7 +548,7 @@
     talkBtn.classList.remove("opening");
     if (!talkHeld || session !== s) return talk.stop(); // let go while the mic was starting
     try {
-      await f.api(`/api/party/${s.code}/talk`, { method: "POST", body: JSON.stringify({ member: s.member, action: "start" }) });
+      await postTalk(s, { action: "start" });
     } catch (err) {
       talkHeld = false;
       talk.stop();
@@ -591,16 +588,17 @@
     const s = session;
     while (talkQueue.length && session === s) {
       const chunk = talkQueue.shift();
-      await f.api(`/api/party/${s.code}/talk`, { method: "POST", body: JSON.stringify({ member: s.member, action: "audio", ...chunk }) }).catch(() => {});
+      await postTalk(s, { action: "audio", ...chunk }).catch(() => {});
     }
     talkSending = false;
     if (talkEnding && !talkLive) sendEnd();
   }
+  const postTalk = (s, body) => f.api(`/api/party/${s.code}/talk`, { method: "POST", body: JSON.stringify({ member: s.member, ...body }) });
   function sendEnd() {
     if (!talkEnding) return;
     talkEnding = false;
     talkQueue = [];
-    if (session) f.api(`/api/party/${session.code}/talk`, { method: "POST", body: JSON.stringify({ member: session.member, action: "end" }) }).catch(() => {});
+    if (session) postTalk(session, { action: "end" }).catch(() => {});
   }
   function talkStarted(msg) {
     if (!party) return;
@@ -1364,21 +1362,10 @@
       box.append(hintEl("Co-pilots are picked from people here with a Frunk account. Nobody like that has joined yet."));
     }
     for (const p of others) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "send-person";
-      b.disabled = p.guest;
-      b.setAttribute("aria-pressed", String(!!p.copilot));
-      const text = document.createElement("span");
-      text.className = "send-person-text";
-      const name = document.createElement("span");
-      name.className = "person-name";
-      name.append(dot(p), p.name);
-      text.append(name);
-      if (p.guest) text.append(Object.assign(document.createElement("span"), { className: "hint", textContent: "Guest · needs a Frunk account" }));
-      b.append(text, Object.assign(document.createElement("span"), { className: "send-check" }));
-      b.onclick = () => saveSettings({ copilots: eligible.filter((g) => (g === p ? !g.copilot : g.copilot)).map((g) => g.id) });
-      box.append(b);
+      box.append(f.personToggle({
+        name: [dot(p), p.name], hint: p.guest ? "Guest · needs a Frunk account" : "", pressed: !!p.copilot, disabled: p.guest,
+        onClick: () => saveSettings({ copilots: eligible.filter((g) => (g === p ? !g.copilot : g.copilot)).map((g) => g.id) }),
+      }));
     }
     return box;
   }
@@ -1419,7 +1406,7 @@
     const code = $("partyCodeForm").code.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (code.length !== 4) return;
     $("partyCodeDialog").close();
-    if (me) joinFlow(code);
+    if (me) join(code);
     else guestFlow(code);
   };
 
@@ -1497,7 +1484,7 @@
         $("partyCodeForm").reset();
         $("partyCodeDialog").showModal();
       } else if (code) {
-        joinFlow(code);
+        join(code);
       } else if (hosting) {
         host();
       } else if (saved) {

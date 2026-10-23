@@ -23,16 +23,20 @@ class FrunkTalk extends AudioWorkletProcessor {
     this.n = 0;
     this.out = new Uint8Array(CHUNK);
     this.len = 0;
-    // "flush": the button was let go, so send what there is now.
+    this.live = false;
+    // "live": the button is down, start encoding. "flush": it was let go, so send what
+    // there is now and go idle (the mic stays open a little while for a quick reply).
     this.port.onmessage = (e) => {
-      if (e.data !== "flush" || !this.len) return;
-      this.port.postMessage(this.out.slice(0, this.len));
+      if (e.data === "live") return void (this.live = true);
+      if (e.data !== "flush") return;
+      this.live = false;
+      if (this.len) this.port.postMessage(this.out.slice(0, this.len));
       this.len = 0;
     };
   }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
-    if (!ch) return true;
+    if (!ch || !this.live) return true;
     // Each output sample is the average of the input samples it covers, which
     // also filters out what 16 kHz can't carry.
     for (let i = 0; i < ch.length; i++) {

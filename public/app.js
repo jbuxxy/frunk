@@ -1180,6 +1180,28 @@
     }
   };
 
+  // A person as a big toggle with a check on the right (sending a tile, picking co-pilots).
+  // name: what goes in the name line (text, and maybe their dot).
+  function personToggle({ name, hint, pressed, disabled = false, onClick }) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "send-person";
+    b.disabled = disabled;
+    b.setAttribute("aria-pressed", String(pressed));
+    const text = document.createElement("span");
+    text.className = "send-person-text";
+    const line = document.createElement("span");
+    line.className = "person-name";
+    line.append(...name);
+    text.append(line);
+    if (hint) text.append(Object.assign(document.createElement("span"), { className: "hint", textContent: hint }));
+    const check = document.createElement("span");
+    check.className = "send-check";
+    b.append(text, check);
+    b.onclick = onClick;
+    return b;
+  }
+
   // ---------- Admin: send a tile to other people's pages ----------
   // People are big toggles; Send copies the tile onto each picked person's page.
   const sendDialog = $("sendDialog");
@@ -1204,28 +1226,15 @@
     const list = $("sendPeople");
     list.replaceChildren();
     for (const u of others) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "send-person";
-      b.setAttribute("aria-pressed", "false");
-      const text = document.createElement("span");
-      text.className = "send-person-text";
-      const name = document.createElement("span");
-      name.className = "person-name";
-      name.textContent = u.name || u.email;
-      const email = document.createElement("span");
-      email.className = "hint";
-      email.textContent = u.email;
-      text.append(name, email);
-      const check = document.createElement("span");
-      check.className = "send-check";
-      b.append(text, check);
-      b.onclick = () => {
-        if (sendTo.has(u.id)) sendTo.delete(u.id);
-        else sendTo.add(u.id);
-        b.setAttribute("aria-pressed", String(sendTo.has(u.id)));
-        updateSendButton();
-      };
+      const b = personToggle({
+        name: [u.name || u.email], hint: u.email, pressed: false,
+        onClick: () => {
+          if (sendTo.has(u.id)) sendTo.delete(u.id);
+          else sendTo.add(u.id);
+          b.setAttribute("aria-pressed", String(sendTo.has(u.id)));
+          updateSendButton();
+        },
+      });
       list.append(b);
     }
     updateSendButton();
@@ -1574,7 +1583,7 @@
   });
   let checkingShared = false;
   async function checkShared() {
-    if (!me.user || checkingShared || document.hidden || editing) return;
+    if (!me.user || checkingShared || document.hidden || editing || !$("party").hidden) return;
     checkingShared = true;
     try {
       const r = await api("/api/me/shared");
@@ -1597,7 +1606,7 @@
 
   // ---------- Shared with party.js (Watch Party) ----------
   const frunk = (window.frunk = {
-    api, toast, pressed, paintAvatar, loadQr, copyText, launch, render, openSignIn,
+    api, toast, pressed, paintAvatar, loadQr, copyText, launch, render, openSignIn, personToggle,
     isTesla, inFullscreen, params, assetV: ASSET_V,
     party: null, // set by party.js
   });

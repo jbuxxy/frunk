@@ -209,6 +209,7 @@ function createPlex(baseUrl, plexTv = "https://plex.tv") {
     return { id: String(m.ratingKey), title: m.title || "Untitled", subtitle, kind, art: !!(m.thumb || m.parentThumb || m.grandparentThumb) };
   }
   const PLAYABLE = ["movie", "show", "season", "episode", "artist", "album", "track"];
+  const VIDEO_TYPES = ["movie", "show", "season", "episode"];
 
   return {
     id: "plex",
@@ -237,11 +238,16 @@ function createPlex(baseUrl, plexTv = "https://plex.tv") {
     },
     // Top level: what you were watching (group "Continue watching"), then each
     // movie, TV and music library (group "Libraries"). in: a folder to open
-    // ("s<section>", or an item id).
-    async browse(token, q, folder) {
+    // ("s<section>", or an item id). only: { video, sections } narrows the libraries
+    // and search results to video, and to those library ids (FSP's view).
+    async browse(token, q, folder, only = {}) {
+      const types = only.video ? VIDEO_TYPES : PLAYABLE;
+      const shown = (section) => !only.sections || only.sections.has(String(section));
       if (q) {
         const found = await library(token, `/hubs/search?${new URLSearchParams({ query: q, limit: "10" })}`);
-        return (found.Hub || []).flatMap((h) => h.Metadata || []).filter((m) => PLAYABLE.includes(m.type)).slice(0, 48).map((m) => toItem(m));
+        return (found.Hub || []).flatMap((h) => h.Metadata || [])
+          .filter((m) => types.includes(m.type) && (m.librarySectionID == null || shown(m.librarySectionID)))
+          .slice(0, 48).map((m) => toItem(m));
       }
       if (!folder) {
         const [{ Directory = [] }, deck] = await Promise.all([
@@ -250,7 +256,7 @@ function createPlex(baseUrl, plexTv = "https://plex.tv") {
         ]);
         return [
           ...(deck.Metadata || []).map((m) => ({ ...toItem(m, { wide: true }), group: "Continue watching" })),
-          ...Directory.filter((d) => ["movie", "show", "artist"].includes(d.type)).map((d) => ({
+          ...Directory.filter((d) => (only.video ? ["movie", "show"] : ["movie", "show", "artist"]).includes(d.type) && shown(d.key)).map((d) => ({
             id: `s${d.key}`, title: d.title, subtitle: { movie: "Movies", show: "TV shows", artist: "Music" }[d.type],
             kind: "folder", art: false, shape: "library", library: d.type, group: "Libraries",
           })),
@@ -310,19 +316,34 @@ function createPlex(baseUrl, plexTv = "https://plex.tv") {
 }
 const ART_SIZES = { poster: [300, 450], wide: [480, 270], square: [400, 400] };
 
+// FSP's partner API (server to server, LAN only, a shared secret): the car player's
+// streams, the libraries FSP shows, the copy it plays, a party car's notes. Always
+// asked with the party host's own Plex key.
+function createPartner(url, secret) {
+  const base = url.replace(/\/$/, "");
+  return {
+    base,
+    call: (path, token, { method = "GET", body, signal = AbortSignal.timeout(15_000) } = {}) => fetch(base + path, {
+      method,
+      signal,
+      body: body && JSON.stringify(body),
+      headers: { authorization: `Bearer ${secret}`, "x-plex-token": token || "", ...(body ? { "content-type": "application/json" } : {}) },
+    }),
+  };
+}
+
 // FSP (Front Seat Plex, the car player for Plex): the same Plex server, browsed the
 // way FSP shows it, so without a library that only holds bigger copies (a 4K
-// library whose titles are all in a smaller one too), and video only. It plays
-// exactly as Plex does, with the host's Plex connection; nothing extra to connect.
-function createFsp(plex, { url, secret, publicUrl }) {
-  const base = url.replace(/\/$/, "");
+// library whose titles are all in a smaller one too), and video only. It plays as
+// Plex does, from the copy FSP would play, with the host's Plex connection.
+function createFsp(plex, partner, publicUrl) {
   const shownCache = new Map(); // token -> { ids: Set of section ids, at }
-  // The libraries FSP shows; null when FSP can't be asked (then everything shows).
+  // The libraries FSP shows; null when FSP can't be asked (then every video one shows).
   async function shown(token) {
     const hit = shownCache.get(token);
     if (hit && Date.now() - hit.at < 10 * 60_000) return hit.ids;
     try {
-      const r = await fetch(`${base}/partner/sections`, { headers: { authorization: `Bearer ${secret}`, "x-plex-token": token || "" }, signal: AbortSignal.timeout(10_000) });
+      const r = await partner.call("/partner/sections", token, { signal: AbortSignal.timeout(10_000) });
       if (!r.ok) return null;
       const ids = new Set(((await r.json()).ids || []).map(String));
       shownCache.set(token, { ids, at: Date.now() });
@@ -335,20 +356,22 @@ function createFsp(plex, { url, secret, publicUrl }) {
     id: "fsp",
     name: "FSP",
     via: "plex", // uses the Plex connection
+    car: true,
     hosts: hostnames(publicUrl),
-    icon: `${base}/icon.svg`, // its logo, for the picker's tab
+    icon: `${partner.base}/icon.svg`, // its logo, for the picker's tab
     async browse(token, q, folder) {
-      const items = await plex.browse(token, q, folder);
-      if (folder && !q) return items;
-      const ids = await shown(token);
-      return items.filter((i) => {
-        if (i.shape === "square" || i.library === "artist") return false; // music isn't FSP's
-        if (i.group === "Libraries") return !ids || ids.has(i.id.slice(1));
-        if (i.group) return true; // Continue watching: FSP plays a smaller copy when there is one
-        return !ids || !i.section || ids.has(i.section);
-      });
+      return plex.browse(token, q, folder, { video: true, sections: folder && !q ? null : await shown(token) });
     },
-    start: (token, itemId) => plex.start(token, itemId),
+    // FSP's choice of copy (a 4K title's 1080p twin), so phones in the party don't make
+    // Plex transcode 4K either.
+    async start(token, itemId) {
+      let id = itemId;
+      try {
+        const r = await partner.call(`/partner/twin?${new URLSearchParams({ id: itemId })}`, token, { signal: AbortSignal.timeout(10_000) });
+        if (r.ok) id = String((await r.json()).id || itemId);
+      } catch {}
+      return plex.start(token, id);
+    },
     art: (token, itemId, opts) => plex.art(token, itemId, opts),
   };
 }
@@ -363,13 +386,23 @@ function hostnames(url) {
 }
 
 function createApps(env) {
+  const partner = env.FSP_URL && env.FSP_SECRET ? createPartner(env.FSP_URL, env.FSP_SECRET) : null;
   const plex = env.PLEX_URL && createPlex(env.PLEX_URL, env.PLEX_TV_URL);
+  if (plex && partner) plex.car = true; // car: plays in the car through FSP
   const list = [
     plex,
-    plex && env.FSP_URL && env.FSP_SECRET && createFsp(plex, { url: env.FSP_URL, secret: env.FSP_SECRET, publicUrl: env.FSP_PUBLIC_URL }),
+    plex && partner && createFsp(plex, partner, env.FSP_PUBLIC_URL),
     env.ABS_URL && createAbs(env.ABS_URL),
   ].filter(Boolean);
-  return { list, byId: (id) => list.find((a) => a.id === id) || null };
+  const byId = (id) => list.find((a) => a.id === id) || null;
+  return {
+    list,
+    byId,
+    partner,
+    // What people connect (FSP isn't one: it uses the Plex connection).
+    connections: list.filter((a) => !a.via),
+    connectionOf: (id) => byId(id)?.via || id,
+  };
 }
 
 module.exports = { createApps, createStream };

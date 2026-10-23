@@ -271,9 +271,10 @@ function createAccounts({ dataDir, ownerEmail }) {
     save();
   }
 
-  // Tiles an admin sent this person: { tile, name, from, at }, kept until they've
-  // seen the notice (ackSharedTiles).
-  function addSharedTile(user, entry) {
+  // A tile an admin sent this person: the tile at the end of their page, and
+  // { tile, name, from, at } kept until they've seen the notice (ackSharedTiles).
+  function addSharedTile(user, site, entry) {
+    user.sites = [...user.sites, site];
     user.sharedTiles = [...(user.sharedTiles || []), entry];
     save();
   }

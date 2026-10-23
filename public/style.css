@@ -18,6 +18,7 @@
   --muted: #8e939b;
   --accent: #3e6ae1;
   --red: #e82127;
+  --gold: #e5a00d; /* Plex and FSP */
   --green: #4cd17a;
   --sheet: #181b20; /* dialog background */
   --raised: #2a2e36;
@@ -421,7 +422,7 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 .badge-pill.invited { background: rgba(229, 160, 13, .16); color: #f2b53a; }
 .badge-pill.expired { background: rgba(232, 33, 39, .16); color: #ff6b70; }
 .person.joined { box-shadow: inset 4px 0 0 #34c759; }
-.person.invited { box-shadow: inset 4px 0 0 #e5a00d; }
+.person.invited { box-shadow: inset 4px 0 0 var(--gold); }
 .person.expired { box-shadow: inset 4px 0 0 var(--red); }
 .person.expired .person-name { color: var(--muted); }
 
@@ -590,7 +591,6 @@ body.in-party .grid { padding-bottom: 280px; } /* room to scroll past the mini p
 .party-people-list { display: grid; gap: 10px; }
 .party-person { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px 10px 14px; border-radius: 16px; background: var(--bg); }
 .party-person-name { flex: 1; min-width: 140px; display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; }
-.party-person .pill.small.on { background: rgba(52, 199, 89, .16); color: var(--green); }
 .party-knock-who { display: flex; justify-content: center; margin-bottom: 12px; }
 .party-knock-who .party-dot { width: 72px; height: 72px; font-size: 32px; }
 #partyKnock h2 { text-align: center; }
@@ -717,7 +717,7 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 }
 .pick-tab img { width: 40px; height: 40px; object-fit: contain; }
 .pick-tab.text { width: auto; padding: 0 16px; color: var(--text); font: inherit; font-weight: 700; }
-.pick-tab[aria-selected="true"] { border-color: #e5a00d; background: color-mix(in srgb, #e5a00d 14%, var(--bg)); }
+.pick-tab[aria-selected="true"] { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 14%, var(--bg)); }
 .pick-tab:active { transform: scale(.94); }
 .party-search {
   flex: 1; min-width: 0; height: 56px; margin: 0 !important; padding: 0 18px;
@@ -756,7 +756,7 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 .pick-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .25s; }
 .pick-art img.in { opacity: 1; }
 .pick-progress { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.28); overflow: hidden; }
-.pick-progress i { display: block; height: 100%; background: #e5a00d; }
+.pick-progress i { display: block; height: 100%; background: var(--gold); }
 .pick-kind { position: absolute; top: 8px; left: 8px; padding: 3px 8px; border-radius: 999px; background: rgba(0,0,0,.6); font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .pick-text { display: grid; gap: 2px; min-width: 0; }
 .pick-text b { font-size: 16px; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
@@ -769,7 +769,7 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
   border: 0; border-radius: 18px; background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .pick-lib:active { transform: scale(.97); }
-.pick-lib svg { flex: none; width: 34px; height: 34px; fill: none; stroke: #e5a00d; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pick-lib svg { flex: none; width: 34px; height: 34px; fill: none; stroke: var(--gold); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .pick-lib-text { display: grid; gap: 2px; min-width: 0; }
 .pick-lib-text b { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pick-lib-text small { font-size: 14px; color: var(--muted); }
@@ -841,11 +841,11 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 }
 
 /* A tile an admin sent you, until you've tapped Got it */
-.tile.is-new { box-shadow: inset 0 0 0 3px #e5a00d, 0 10px 30px rgba(0,0,0,.35); }
+.tile.is-new { box-shadow: inset 0 0 0 3px var(--gold), 0 10px 30px rgba(0,0,0,.35); }
 .tile .new-badge {
   position: absolute; top: 12px; left: 12px;
   padding: 4px 10px; border-radius: 999px;
-  background: #e5a00d; color: #111;
+  background: var(--gold); color: #111;
   font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
 }
 .shared-tiles { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin: 6px 0 2px; }
@@ -863,7 +863,7 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 /* Push-to-talk: hold the button; a banner says who's talking */
 .party-talk { gap: 10px; min-width: 132px; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .party-talk svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.party-talk.live { background: var(--red, #e82127); color: #fff; box-shadow: 0 0 0 0 rgba(232, 33, 39, .5); animation: talk-live 1.2s ease-out infinite; }
+.party-talk.live { background: var(--red); color: #fff; box-shadow: 0 0 0 0 rgba(232, 33, 39, .5); animation: talk-live 1.2s ease-out infinite; }
 .party-talk.opening { opacity: .7; }
 .party-talk.off, .party-talk.busy { opacity: .45; }
 @keyframes talk-live { to { box-shadow: 0 0 0 16px rgba(232, 33, 39, 0); } }

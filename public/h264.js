@@ -35,14 +35,22 @@
 
   // Tesla's MCU3 (2022+) has an AMD Ryzen with Radeon graphics; MCU2 an Intel Atom with
   // Intel HD graphics. The GPU name is the reliable tell; core count is a fallback hint.
+  var gpu;
+  function gpuName() {
+    if (gpu === undefined) {
+      gpu = null;
+      try {
+        var gl = document.createElement('canvas').getContext('webgl');
+        var ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
+        gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : null;
+      } catch (e) { /* no WebGL */ }
+    }
+    return gpu;
+  }
   function carTier() {
-    try {
-      var gl = document.createElement('canvas').getContext('webgl');
-      var ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
-      var name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
-      if (/AMD|Radeon/i.test(name)) return 'new';
-      if (/Intel/i.test(name)) return 'old';
-    } catch (e) { /* no WebGL */ }
+    var name = gpuName() || '';
+    if (/AMD|Radeon/i.test(name)) return 'new';
+    if (/Intel/i.test(name)) return 'old';
     var cores = navigator.hardwareConcurrency || 0;
     return cores >= 8 ? 'new' : 'unknown';
   }
@@ -145,34 +153,54 @@
 
   // ---------- backends ----------
 
-  function WasmBackend(dec) {
-    var self = this;
-    this.dec = dec;
-    this.ready = false;
-    this.renderer = null;
-    this.w = 0; this.h = 0;
-    this.worker = new Worker('/h264-worker.js');
-    this.worker.onmessage = function (e) {
-      var m = e.data;
-      if (m.type === 'ready') { self.ready = true; dec.pump(); return; }
-      if (m.type === 'picture') {
-        var r = dec.destination; // JSMpeg's WebGL renderer
-        if (r) {
-          if (m.width !== self.w || m.height !== self.h) { self.w = m.width; self.h = m.height; r.resize(m.width, m.height); }
-          var pic = new Uint8Array(m.data), ys = m.width * m.height, cs = ys >> 2;
-          // Same plane order JSMpeg's MPEG-1 decoder hands its renderer (Y, Cr, Cb).
-          r.render(pic.subarray(0, ys), pic.subarray(ys + cs, ys + 2 * cs), pic.subarray(ys, ys + cs), false);
-        }
-        return dec.done(true);
-      }
-      if (m.type === 'none') return dec.done(false);
+  // One decoder worker for the page, reset between streams: starting a worker loads and
+  // compiles the 180 KB WebAssembly decoder, which took a weak car a few hundred ms on
+  // every seek, pause or quality change. Picture buffers go back to the worker once
+  // drawn, instead of a new 1.4 MB one per 720p frame for the garbage collector.
+  var VERSION = (document.currentScript && /\?v=[^&]+/.exec(document.currentScript.src) || [''])[0];
+  var shared = null; // { worker, ready, owner: the WasmBackend now using it }
+  function decoderWorker() {
+    if (shared) return shared;
+    shared = { worker: new Worker('/h264-worker.js' + VERSION), ready: false, owner: null };
+    shared.worker.onmessage = function (e) {
+      var m = e.data, owner = shared.owner;
+      if (m.type === 'ready') { shared.ready = true; if (owner) owner.dec.pump(); return; }
+      if (owner && m.stream === owner.stream) owner.message(m);
+      else if (m.type === 'picture') recycle(m.data); // from a stream that's gone
     };
+    return shared;
   }
+  function recycle(buf) { shared.worker.postMessage({ type: 'recycle', data: buf }, [buf]); }
+  var streams = 0;
+
+  function WasmBackend(dec) {
+    this.dec = dec;
+    this.w = 0; this.h = 0;
+    this.stream = ++streams;
+    this.shared = decoderWorker();
+    this.shared.owner = this;
+    this.shared.worker.postMessage({ type: 'reset' });
+  }
+  Object.defineProperty(WasmBackend.prototype, 'ready', { get: function () { return this.shared.ready; } });
+  WasmBackend.prototype.message = function (m) {
+    var dec = this.dec;
+    if (m.type === 'none') return dec.done(false);
+    var r = dec.destination; // JSMpeg's WebGL renderer
+    if (r) {
+      if (m.width !== this.w || m.height !== this.h) { this.w = m.width; this.h = m.height; r.resize(m.width, m.height); }
+      var pic = new Uint8Array(m.data), ys = m.width * m.height, cs = ys >> 2;
+      // Same plane order JSMpeg's MPEG-1 decoder hands its renderer (Y, Cr, Cb). The
+      // textures are uploaded right here, so the buffer can go back straight after.
+      r.render(pic.subarray(0, ys), pic.subarray(ys + cs, ys + 2 * cs), pic.subarray(ys, ys + cs), false);
+    }
+    recycle(m.data);
+    dec.done(true);
+  };
   WasmBackend.prototype.decode = function (au) {
     var buf = au.data.buffer.byteLength === au.data.byteLength ? au.data.buffer : au.data.slice().buffer;
-    this.worker.postMessage({ type: 'decode', data: buf }, [buf]);
+    this.shared.worker.postMessage({ type: 'decode', stream: this.stream, data: buf }, [buf]);
   };
-  WasmBackend.prototype.destroy = function () { try { this.worker.terminate(); } catch (e) { /* gone */ } };
+  WasmBackend.prototype.destroy = function () { if (this.shared.owner === this) this.shared.owner = null; };
 
   function WebCodecsBackend(dec) {
     var self = this;
@@ -234,5 +262,5 @@
     return player;
   }
 
-  window.H264 = { support: support, carTier: carTier, createPlayer: createPlayer };
+  window.H264 = { support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer };
 })();
