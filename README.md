@@ -92,6 +92,8 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
 | `PLEX_URL` | Your Plex server, e.g. `https://plex.example.com`, for the Watch Party. People connect by entering a code at plex.tv/link; Frunk keeps a token for this server only. |
 | `ABS_URL` | Your Audiobookshelf server, e.g. `https://abs.example.com`, for the Watch Party. People connect their own account to it with an API key; Frunk only ever talks to this address. |
+| `PLEXDRIVE_URL`, `PLEXDRIVE_SECRET` | Optional: a PlexDrive server on your LAN and its partner secret. In the Tesla, Plex parties then play on a canvas the car doesn't pause while driving, one shared stream per party. Without it the car uses the normal player, which Drive pauses. |
+| `PLEXDRIVE_PUBLIC_URL` | Optional: PlexDrive's public address, e.g. `https://plexdrive.example.com`. A PlexDrive tile then counts as Plex in a Watch Party: badged, and it opens the Plex picker. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
 
@@ -131,6 +133,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `public/vendor/qrcode.min.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4, MIT |
 | `public/party.js` | Watch Party: Host and Join, the party screen, playback kept in step |
 | `public/vendor/hls.min.js` | [hls.js](https://github.com/video-dev/hls.js) 1.5.17, Apache-2.0 |
+| `public/car.js` | Watch Party in the Tesla: Plex parties on a canvas (via PlexDrive), in step with the party |
+| `public/vendor/jsmpeg.min.js` | [jsmpeg-player](https://github.com/cycjimmy/jsmpeg-player) 6.1.2 (JSMpeg), MIT |
 | `public/vendor/twemoji/` | Chat emoji from [Twemoji](https://github.com/jdecked/twemoji) 15.1.0, graphics CC-BY 4.0 |
 | `public/fonts/` | Inter and Rajdhani (Latin subset), SIL Open Font License |
 | `test/` | Unit, API and browser tests |
@@ -165,6 +169,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
   account on the server and never sent back to a browser.
 - Guests stream what the host plays through Frunk, and only while they're in
   that party; each new choice gets new addresses.
+- The car player's stream comes from PlexDrive through Frunk, asked for with the
+  host's key and a shared secret over your LAN; neither reaches a browser.
 - A guest without an account gets a pass (an HttpOnly cookie) for that one
   party: it reaches the party's own routes and nothing else, can't choose what
   plays, and stops working when the party ends or the host removes them. Guest

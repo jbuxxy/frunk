@@ -31,10 +31,12 @@ const GUEST_NAME_MAX = 30;
 //     host's key, which never leaves the server (apps.js createStream)
 //   art(userId, sourceId, itemId): a fetch Response with the item's cover
 // person(userId): { name, color } or null once the account is gone.
+// carFor(sourceId, kind): whether the car player (PlexDrive, see server.js) can play
+//   this, so the Tesla gets a canvas instead of a <video> it would pause in Drive.
 //
 // Everyone in a party is an "identity": a Frunk account's id, or a guest's
 // ("g_…") that only exists inside that party.
-function createParties({ sourcesFor, browse, start, art, person }) {
+function createParties({ sourcesFor, browse, start, art, person, carFor = () => false }) {
   const parties = new Map(); // code -> party
   const lobby = new Set(); // { res, userId }: pages showing who's hosting
 
@@ -360,6 +362,7 @@ function createParties({ sourcesFor, browse, start, art, person }) {
           source: source.id, id: media.id, title: item.title, subtitle: item.subtitle || "", kind: item.kind,
           src: item.stream ? `/api/party/${p.code}/stream/${load}/${item.stream.entry}` : item.src,
           art: item.art ? `/api/party/${p.code}/art/${source.id}/${encodeURIComponent(media.id)}` : null,
+          car: carFor(source.id, item.kind) ? `/api/party/${p.code}/car/${load}` : null,
         };
         Object.assign(p, { playing: true, position: 0, at: now });
         broadcast(p, { kind: "load", by });
@@ -465,6 +468,18 @@ function createParties({ sourcesFor, browse, start, art, person }) {
       const p = find(code);
       const here = p && [...p.members.values()].some((m) => m.userId === userId);
       return here && p.stream && String(p.loads) === String(load) ? p.stream : null;
+    },
+    // What the car player streams, for someone in the party: the title, whose key
+    // plays it, and this stretch of continuous playback (segment), which changes on
+    // every play, pause or seek so all the cars share one stream until then.
+    carFor(code, userId, load) {
+      const p = find(code);
+      const here = p && [...p.members.values()].some((m) => m.userId === userId);
+      if (!here || !p.media || !p.media.car || String(p.loads) !== String(load)) return null;
+      return {
+        hostId: p.hostId, source: p.media.source, id: p.media.id, playing: p.playing,
+        segment: `${p.code}:${p.loads}:${p.at}`, position: positionOf(p),
+      };
     },
     artFor(code, userId, sourceId, itemId) {
       const p = find(code);

@@ -518,6 +518,10 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
   user-select: none;
 }
 .party video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+/* The car player (car.js): a canvas in the video's place; the last picture stays as a still while paused. */
+.party-car { position: absolute; inset: 0; background: #000 center / contain no-repeat; }
+.party-car[hidden] { display: none; }
+.party-car canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; transition: opacity .2s; }
 .party-top, .party-controls, .party-who, .party-away { position: absolute; left: 0; right: 0; transition: opacity .3s; }
 .party-top {
   top: 0; display: flex; align-items: center; gap: 14px;
@@ -562,7 +566,7 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
   border-radius: 20px; overflow: hidden;
   box-shadow: 0 16px 48px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.1);
 }
-.party.mini > :not(video):not(.party-mini-bar):not(.party-art) { display: none !important; }
+.party.mini > :not(video):not(.party-car):not(.party-mini-bar):not(.party-art) { display: none !important; }
 .party.mini .party-art { padding: 16px; gap: 16px; justify-content: flex-start; }
 .party.mini .party-art img { width: auto; height: 100%; max-height: none; }
 .party.mini .party-art > div { display: none; }

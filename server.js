@@ -444,7 +444,7 @@ function requestOrigin(req) {
 const SECURITY_HEADERS = {
   "content-security-policy": [
     "default-src 'self'",
-    "script-src 'self' https://accounts.google.com/gsi/client",
+    "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client", // WebAssembly: the car player's decoder
     "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style", // Google's button injects inline styles
     "font-src 'self'",
     "img-src 'self' data:",
@@ -1087,6 +1087,20 @@ const parties = createParties({
     const u = userById(userId);
     return u && { name: u.name || u.email, color: u.avatarColor || null };
   },
+  carFor: (sourceId, kind) => !!PLEXDRIVE && sourceId === "plex" && kind === "video",
+});
+
+// ---------- Watch Party in the car ----------
+// The Tesla pauses any <video> while driving, so with PLEXDRIVE_URL set, a Plex party
+// plays in the car through PlexDrive instead: it turns the title into MPEG-1 that
+// public/car.js draws on a canvas, one stream per party shared by every car in it.
+// Frunk asks with the host's own Plex key, as for the regular stream.
+const PLEXDRIVE = process.env.PLEXDRIVE_URL && process.env.PLEXDRIVE_SECRET
+  ? { base: process.env.PLEXDRIVE_URL.replace(/\/$/, ""), secret: process.env.PLEXDRIVE_SECRET }
+  : null;
+const plexDrive = (path, token, signal) => fetch(`${PLEXDRIVE.base}${path}`, {
+  headers: { authorization: `Bearer ${PLEXDRIVE.secret}`, "x-plex-token": token || "" },
+  signal,
 });
 
 // Connected apps: each person's own account on the configured servers, by
@@ -1227,6 +1241,49 @@ on("GET", "/api/party/:code/stream/:load/:file", "party", async ({ req, res, par
   for (const h of ["content-length", "content-range", "accept-ranges"]) if (r.headers.get(h)) headers[h] = r.headers.get(h);
   res.writeHead(r.status, headers);
   const body = Readable.fromWeb(r.body);
+  req.on("close", () => body.destroy());
+  body.pipe(res);
+});
+on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who }) => {
+  const c = PLEXDRIVE && parties.carFor(params.code, who, params.load);
+  if (!c) return json(res, 404, { error: "not found" });
+  let r;
+  try {
+    r = await plexDrive(`/partner/info?id=${encodeURIComponent(c.id)}`, tokenFor(c.hostId, c.source), AbortSignal.timeout(15_000));
+  } catch {
+    return json(res, 502, { error: "PlexDrive didn't answer." });
+  }
+  if (!r.ok) return json(res, 502, { error: "PlexDrive can't play this." });
+  const { duration, fps } = await r.json();
+  return json(res, 200, { duration, fps });
+});
+on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, params, who }) => {
+  const c = PLEXDRIVE && parties.carFor(params.code, who, params.load);
+  if (!c || !c.playing) return json(res, 404, { error: "not found" });
+  // solo: a car that fell out of step gets its own catch-up stream instead of the shared one.
+  const solo = /^[a-z0-9]{1,16}$/.test(url.searchParams.get("solo") || "") ? `:${url.searchParams.get("solo")}` : "";
+  const ctl = new AbortController();
+  req.on("close", () => ctl.abort());
+  const slow = setTimeout(() => ctl.abort(), 20_000); // only until PlexDrive starts answering
+  let r;
+  try {
+    const q = new URLSearchParams({ id: c.id, key: c.segment + solo, pos: c.position.toFixed(2) });
+    r = await plexDrive(`/partner/party?${q}`, tokenFor(c.hostId, c.source), ctl.signal);
+  } catch {
+    return res.headersSent || json(res, 502, { error: "PlexDrive didn't answer." });
+  } finally {
+    clearTimeout(slow);
+  }
+  if (!r.ok) {
+    if (r.status === 429) return json(res, 429, { error: "Too many people are watching through PlexDrive right now." });
+    return json(res, 502, { error: "PlexDrive can't play this." });
+  }
+  res.writeHead(200, {
+    "content-type": "video/mp2t", "cache-control": "no-store", "x-content-type-options": "nosniff",
+    "x-accel-buffering": "no", "x-stream-pos": r.headers.get("x-stream-pos") || "0",
+  });
+  const body = Readable.fromWeb(r.body);
+  body.on("error", () => res.end());
   req.on("close", () => body.destroy());
   body.pipe(res);
 });

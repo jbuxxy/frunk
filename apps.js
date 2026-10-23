@@ -144,7 +144,7 @@ function createAbs(baseUrl) {
 // token for this one server (not the whole Plex account), so it works for
 // people the server is shared with too. Everyone in a party watches one
 // transcode session: Plex works once, Frunk hands the pieces out.
-function createPlex(baseUrl, plexTv = "https://plex.tv") {
+function createPlex(baseUrl, plexTv = "https://plex.tv", extraHosts = []) {
   const base = baseUrl.replace(/\/$/, "");
   // Plex knows each app by an id; this one is fixed per Frunk server.
   const client = `frunk-${crypto.createHash("sha256").update(base).digest("hex").slice(0, 16)}`;
@@ -187,8 +187,8 @@ function createPlex(baseUrl, plexTv = "https://plex.tv") {
     name: "Plex",
     connect: "link",
     linkAt: "plex.tv/link", // where the code is entered
-    // Your Plex tile, the Plex web app, and Chromatix (a web player for Plex music).
-    hosts: [new URL(base).hostname, "app.plex.tv", "chromatix.app"],
+    // Your Plex tile, the Plex web app, and PlexDrive (the car player for Plex), if set up.
+    hosts: [new URL(base).hostname, "app.plex.tv", ...extraHosts],
     link: {
       async start() {
         const pin = await call(`${plexTv}/api/v2/pins`, null, { method: "POST" });
@@ -269,9 +269,18 @@ function createPlex(baseUrl, plexTv = "https://plex.tv") {
   };
 }
 
+// "https://a.example/x" -> ["a.example"]; nothing for an unset or bad address.
+function hostnames(url) {
+  try {
+    return url ? [new URL(url).hostname.replace(/^www\./, "")] : [];
+  } catch {
+    return [];
+  }
+}
+
 function createApps(env) {
   const list = [
-    env.PLEX_URL && createPlex(env.PLEX_URL, env.PLEX_TV_URL),
+    env.PLEX_URL && createPlex(env.PLEX_URL, env.PLEX_TV_URL, hostnames(env.PLEXDRIVE_PUBLIC_URL)),
     env.ABS_URL && createAbs(env.ABS_URL),
   ].filter(Boolean);
   return { list, byId: (id) => list.find((a) => a.id === id) || null };

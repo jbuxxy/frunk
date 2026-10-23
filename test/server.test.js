@@ -556,7 +556,7 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
   plex.linked = true; // the code was entered at plex.tv/link
   assert.deepEqual((await srv.request("GET", "/api/apps/plex/link", { cookie: member })).body, { status: "connected", account: "jordan" });
   const [source] = (await srv.request("GET", "/api/party/sources", { cookie: member })).body;
-  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv", "chromatix.app"]);
+  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv"]);
 
   const { code } = (await post("/api/party", member)).body;
   const host = (await post(`/api/party/${code}/join`, member)).body;
@@ -599,6 +599,65 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
   await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(plex.stopped, [plex.started[0]]);
   await guestEvents.close();
+});
+
+test("watch party in the car: a Plex party streams through PlexDrive, shared per stretch", async (t) => {
+  // A stand-in PlexDrive: answers info and the party stream, and notes what it was asked.
+  const asked = [];
+  const pd = http.createServer((req, res) => {
+    const u = new URL(req.url, "http://x");
+    asked.push({ path: u.pathname, q: Object.fromEntries(u.searchParams), auth: req.headers.authorization, token: req.headers["x-plex-token"] });
+    if (u.pathname === "/partner/info") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ duration: 1440000, fps: 24, title: "x" }));
+    if (u.pathname === "/partner/party") return res.writeHead(200, { "content-type": "video/mp2t", "x-stream-pos": "12.500" }).end("ts-bytes");
+    res.writeHead(404).end();
+  });
+  await new Promise((r) => pd.listen(0, "127.0.0.1", r));
+  pd.unref();
+  const plex = await fakePlex();
+  const env = { ...plex.env, PLEXDRIVE_URL: `http://127.0.0.1:${pd.address().port}`, PLEXDRIVE_SECRET: "s3cret", PLEXDRIVE_PUBLIC_URL: "https://plexdrive.example" };
+  const { srv, admin, member } = await serverWithPeople({ env });
+  t.after(() => Promise.all([srv.stop(), plex.close(), new Promise((r) => pd.close(r))]));
+  const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
+
+  plex.linked = true;
+  await post("/api/apps/plex/link", member);
+  await srv.request("GET", "/api/apps/plex/link", { cookie: member });
+  // A PlexDrive tile counts as Plex during a party.
+  const [source] = (await srv.request("GET", "/api/party/sources", { cookie: member })).body;
+  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv", "plexdrive.example"]);
+  const { code } = (await post("/api/party", member)).body;
+  const host = (await post(`/api/party/${code}/join`, member)).body;
+  const guest = (await post(`/api/party/${code}/join`, admin)).body;
+  const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, admin);
+  assert.equal((await post(`/api/party/${code}/control`, member, { member: host.member, action: "load", media: { source: "plex", id: "202" } })).status, 200);
+  let msg;
+  do msg = await guestEvents.nextOf("party"); while (!msg.party.state.media);
+  const media = msg.party.state.media;
+  await guestEvents.close();
+  assert.match(media.car, new RegExp(`^/api/party/${code}/car/\\d+$`));
+
+  const info = await srv.request("GET", `${media.car}/info`, { cookie: admin });
+  assert.deepEqual(info.body, { duration: 1440000, fps: 24 });
+  const r = await fetch(`${srv.base}${media.car}/stream`, { headers: { cookie: admin } });
+  assert.equal(r.headers.get("x-stream-pos"), "12.500");
+  assert.equal(await r.text(), "ts-bytes");
+  const party = asked.find((a) => a.path === "/partner/party");
+  assert.equal(party.auth, "Bearer s3cret");
+  assert.equal(party.token, "server-token", "asked with the host's own Plex key");
+  assert.equal(party.q.id, "202");
+  assert.match(party.q.key, new RegExp(`^${code}:\\d+:\\d+$`));
+
+  // A second car in the same stretch asks for the same shared stream; a car that
+  // fell out of step gets its own.
+  await fetch(`${srv.base}${media.car}/stream`, { headers: { cookie: member } }).then((x) => x.text());
+  await fetch(`${srv.base}${media.car}/stream?solo=abc123`, { headers: { cookie: member } }).then((x) => x.text());
+  const keys = asked.filter((a) => a.path === "/partner/party").map((a) => a.q.key);
+  assert.equal(keys[1], keys[0]);
+  assert.equal(keys[2], `${keys[0]}:abc123`);
+
+  // Outsiders and stale choices get nothing.
+  assert.equal((await srv.request("GET", `${media.car}/info`)).status, 401);
+  assert.equal((await srv.request("GET", `/api/party/${code}/car/999/info`, { cookie: admin })).status, 404);
 });
 
 test("watch party guests and asking to join: approve, deny, remove", async (t) => {

@@ -7,6 +7,9 @@
   const $ = (id) => document.getElementById(id);
   const view = $("party");
   const video = $("partyVideo");
+  const car = window.frunkCar; // the canvas player for Plex parties in the Tesla
+  car.onBlocked = () => { $("partyTapToPlay").hidden = false; };
+  const duration = () => (car.active ? car.duration : video.duration);
 
   const store = {
     get(k) { try { return JSON.parse(sessionStorage.getItem(k)); } catch { return null; } },
@@ -438,7 +441,9 @@
       f.toast(err.message, 4000);
     }
   }
-  const here = () => Math.max(0, video.readyState ? video.currentTime : target());
+  const here = () => Math.max(0, car.active
+    ? (Number.isFinite(car.currentTime) ? car.currentTime : target())
+    : video.readyState ? video.currentTime : target());
   $("partyPlay").onclick = () => control(party.state.playing ? "pause" : "play", { position: here() });
   $("partyBack").onclick = () => control("seek", { position: Math.max(0, target() - 10) });
   $("partyFwd").onclick = () => control("seek", { position: target() + 10 });
@@ -463,6 +468,7 @@
   $("partyTapToPlay").onclick = () => {
     $("partyTapToPlay").hidden = true;
     blocked = false;
+    if (car.active) return car.unlock();
     video.play().catch(() => {});
   };
 
@@ -486,6 +492,8 @@
     return hlsReady;
   }
   function unload() {
+    car.unload();
+    video.hidden = false;
     loadedSrc = null;
     if (hls) hls.destroy();
     hls = null;
@@ -498,6 +506,12 @@
     unload();
     loadedSrc = src;
     if (!src) return;
+    // In the car a Plex video plays on the canvas player (car.js): the Tesla pauses
+    // <video> while driving.
+    if (media.car && f.isTesla) {
+      video.hidden = true;
+      return car.load(media.car);
+    }
     // HLS: the browser's own player where it has one (iPhone), else hls.js.
     if (/\.m3u8(\?|$)/.test(src) && !video.canPlayType("application/vnd.apple.mpegurl")) {
       try {
@@ -531,6 +545,10 @@
 
   // Twice a second: match the party's clock.
   function sync() {
+    if (car.active) {
+      if (party && party.state.media) car.sync(party.state.playing, target());
+      return showTime();
+    }
     if (!party || !party.state.media || video.readyState < 1) return showTime();
     const s = party.state;
     let want = target();
@@ -576,12 +594,12 @@
     const s = String(sec % 60).padStart(2, "0");
     return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
   };
-  const times = (at) => `${clock(at)}${Number.isFinite(video.duration) ? ` / ${clock(video.duration)}` : ""}`;
+  const times = (at) => `${clock(at)}${Number.isFinite(duration()) ? ` / ${clock(duration())}` : ""}`;
   function showTime() {
     if (!party || !party.state.media || scrubbing) return;
     const at = target();
     const seek = $("partySeek");
-    if (Number.isFinite(video.duration)) seek.max = video.duration;
+    if (Number.isFinite(duration())) seek.max = duration();
     seek.value = at;
     $("partyTime").textContent = times(at);
   }
