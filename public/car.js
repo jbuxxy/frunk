@@ -1,7 +1,9 @@
 // Frunk — the car player for Watch Party. The Tesla pauses any <video> while
 // driving, so in the car a Plex party plays here instead: PlexDrive turns the title
-// into MPEG-1 video and MP2 audio in one stream, which JSMpeg decodes onto a
-// <canvas> and Web Audio, keeping the two in step itself. Every car in a party
+// into H.264 (on its iGPU) or MPEG-1 video with MP2 audio in one stream, which JSMpeg
+// decodes onto a <canvas> and Web Audio, keeping the two in step itself. H.264 is
+// decoded by h264.js (the car's hardware decoder if its browser has one, else
+// WebAssembly); a car that can't keep up steps down to 480p, then to MPEG-1. Every car in a party
 // shares that one stream; the server says where in the title this car joined
 // (x-stream-pos), and JSMpeg's clock counts on from there.
 window.frunkCar = (() => {
@@ -9,18 +11,45 @@ window.frunkCar = (() => {
   const box = document.getElementById("partyCar");
 
   let jsmpegReady = null;
+  const loadScript = (src) => new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `${src}?v=${f.assetV}`;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.append(script);
+  });
   function loadJsmpeg() {
-    jsmpegReady ||= new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = `/vendor/jsmpeg.min.js?v=${f.assetV}`;
-      script.onload = resolve;
-      script.onerror = () => {
-        jsmpegReady = null;
-        reject(new Error("Couldn't load the car player. Try again."));
-      };
-      document.head.append(script);
+    jsmpegReady ||= loadScript("/vendor/jsmpeg.min.js").then(() => loadScript("/h264.js")).catch(() => {
+      jsmpegReady = null;
+      throw new Error("Couldn't load the car player. Try again.");
     });
     return jsmpegReady;
+  }
+
+  // What this car plays, remembered on it: H.264 at 720p on newer cars (AMD), 480p on
+  // older or unknown ones; lower after it fell behind (see stepDown).
+  const keep = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  let codec = "mpeg1";
+  let quality = 720;
+  let backend = null;
+  let steppedAt = 0;
+  function stepDown() {
+    if (Date.now() - steppedAt < 15_000) return;
+    steppedAt = Date.now();
+    if (codec === "h264" && quality > 480) {
+      quality = 480;
+      keep.set("frunk-car-q", "480");
+      f.toast("The car is falling behind at 720p, so switching to 480p", 4000);
+    } else if (codec === "h264") {
+      codec = "mpeg1";
+      keep.set("frunk-car-codec", "mpeg1");
+      f.toast("Switching to the lighter video format for this car", 4000);
+    } else return;
+    stop(true);
+    open(false); // the party's shared stream for the new setting
   }
 
   // A JSMpeg source over plain HTTP streaming, instead of its WebSocket one.
@@ -73,6 +102,7 @@ window.frunkCar = (() => {
   let openedAt = 0;
   let lastFrame = 0;
   let retryAt = 0; // after a failed start, wait before trying again
+  let ready = false; // load() has picked the codec and quality; no stream before that
 
   function stop(keepPicture) {
     if (player) {
@@ -105,7 +135,7 @@ window.frunkCar = (() => {
     joinPos = 0;
     frames = 0;
     const me = canvas;
-    const url = `${base}/stream${solo ? `?solo=${Math.random().toString(36).slice(2, 10)}` : ""}`;
+    const url = `${base}/stream?codec=${codec}&q=${quality}${solo ? `&solo=${Math.random().toString(36).slice(2, 10)}` : ""}`;
     const Source = fetchSource(
       (headers) => { joinPos = parseFloat(headers.get("x-stream-pos")) || 0; },
       (err) => {
@@ -115,10 +145,12 @@ window.frunkCar = (() => {
         f.toast(err.message, 5000);
       },
     );
-    player = new window.JSMpeg.Player(url, {
+    const options = {
       source: Source, canvas, audio: true, video: true,
       pauseWhenHidden: false, preserveDrawingBuffer: true,
       videoBufferSize: 4 * 1024 * 1024, audioBufferSize: 512 * 1024,
+      fps: (info && info.fps) || 30, backend,
+      onBehind: () => { if (canvas === me) stepDown(); },
       onVideoDecode: () => {
         if (canvas !== me) return;
         frames++;
@@ -128,7 +160,8 @@ window.frunkCar = (() => {
           box.style.backgroundImage = "";
         }
       },
-    });
+    };
+    player = codec === "h264" ? window.H264.createPlayer(url, options) : new window.JSMpeg.Player(url, options);
     // Sound needs a tap when the browser hasn't let this page play any yet.
     setTimeout(() => {
       const ctx = player && player.audioOut && player.audioOut.context;
@@ -142,6 +175,7 @@ window.frunkCar = (() => {
     async load(url) {
       car.unload();
       base = url;
+      const mine = url;
       car.active = true;
       box.hidden = false;
       try {
@@ -149,8 +183,19 @@ window.frunkCar = (() => {
       } catch (err) {
         f.toast(err.message, 5000);
       }
+      // H.264 when PlexDrive can encode it and this browser can decode it.
+      codec = "mpeg1";
+      try {
+        await loadJsmpeg();
+        const sup = await window.H264.support();
+        backend = sup.webcodecs ? "webcodecs" : sup.wasm ? "wasm" : null;
+        if (backend && info && (info.codecs || []).includes("h264")) codec = keep.get("frunk-car-codec") || "h264";
+        quality = Number(keep.get("frunk-car-q")) || (window.H264.carTier() === "new" ? 720 : 480);
+      } catch {}
+      if (base === mine) ready = true;
     },
     unload() {
+      ready = false;
       stop(false);
       base = null;
       info = null;
@@ -167,7 +212,7 @@ window.frunkCar = (() => {
     },
     // Twice a second from party.js: follow the party's clock.
     sync(playing, want) {
-      if (!base) return;
+      if (!base || !ready) return;
       const now = Date.now();
       if (!playing) return stop(true);
       if (!player) {

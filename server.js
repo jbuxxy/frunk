@@ -1254,8 +1254,8 @@ on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who 
     return json(res, 502, { error: "PlexDrive didn't answer." });
   }
   if (!r.ok) return json(res, 502, { error: "PlexDrive can't play this." });
-  const { duration, fps } = await r.json();
-  return json(res, 200, { duration, fps });
+  const { duration, fps, codecs } = await r.json();
+  return json(res, 200, { duration, fps, codecs: Array.isArray(codecs) ? codecs : ["mpeg1"] });
 });
 on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, params, who }) => {
   const c = PLEXDRIVE && parties.carFor(params.code, who, params.load);
@@ -1267,7 +1267,10 @@ on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, 
   const slow = setTimeout(() => ctl.abort(), 20_000); // only until PlexDrive starts answering
   let r;
   try {
-    const q = new URLSearchParams({ id: c.id, key: c.segment + solo, pos: c.position.toFixed(2) });
+    // What this car plays: H.264 (encoded on PlexDrive's iGPU) or MPEG-1, at 360/480/720.
+    const codec = url.searchParams.get("codec") === "h264" ? "h264" : "mpeg1";
+    const quality = ["360", "480", "720"].includes(url.searchParams.get("q")) ? url.searchParams.get("q") : "720";
+    const q = new URLSearchParams({ id: c.id, key: c.segment + solo, pos: c.position.toFixed(2), codec, q: quality });
     r = await plexDrive(`/partner/party?${q}`, tokenFor(c.hostId, c.source), ctl.signal);
   } catch {
     return res.headersSent || json(res, 502, { error: "PlexDrive didn't answer." });

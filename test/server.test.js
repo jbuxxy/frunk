@@ -607,7 +607,7 @@ test("watch party in the car: a Plex party streams through PlexDrive, shared per
   const pd = http.createServer((req, res) => {
     const u = new URL(req.url, "http://x");
     asked.push({ path: u.pathname, q: Object.fromEntries(u.searchParams), auth: req.headers.authorization, token: req.headers["x-plex-token"] });
-    if (u.pathname === "/partner/info") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ duration: 1440000, fps: 24, title: "x" }));
+    if (u.pathname === "/partner/info") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ duration: 1440000, fps: 24, title: "x", codecs: ["h264", "mpeg1"] }));
     if (u.pathname === "/partner/party") return res.writeHead(200, { "content-type": "video/mp2t", "x-stream-pos": "12.500" }).end("ts-bytes");
     res.writeHead(404).end();
   });
@@ -637,11 +637,16 @@ test("watch party in the car: a Plex party streams through PlexDrive, shared per
   assert.match(media.car, new RegExp(`^/api/party/${code}/car/\\d+$`));
 
   const info = await srv.request("GET", `${media.car}/info`, { cookie: admin });
-  assert.deepEqual(info.body, { duration: 1440000, fps: 24 });
+  assert.deepEqual(info.body, { duration: 1440000, fps: 24, codecs: ["h264", "mpeg1"] });
   const r = await fetch(`${srv.base}${media.car}/stream`, { headers: { cookie: admin } });
   assert.equal(r.headers.get("x-stream-pos"), "12.500");
   assert.equal(await r.text(), "ts-bytes");
   const party = asked.find((a) => a.path === "/partner/party");
+  assert.deepEqual([party.q.codec, party.q.q], ["mpeg1", "720"], "defaults when the car doesn't say");
+  await fetch(`${srv.base}${media.car}/stream?codec=h264&q=480`, { headers: { cookie: admin } }).then((x) => x.text());
+  assert.deepEqual(asked.filter((a) => a.path === "/partner/party").map((a) => [a.q.codec, a.q.q]).pop(), ["h264", "480"]);
+  await fetch(`${srv.base}${media.car}/stream?codec=vp9&q=4000`, { headers: { cookie: admin } }).then((x) => x.text());
+  assert.deepEqual(asked.filter((a) => a.path === "/partner/party").map((a) => [a.q.codec, a.q.q]).pop(), ["mpeg1", "720"], "anything else falls back");
   assert.equal(party.auth, "Bearer s3cret");
   assert.equal(party.token, "server-token", "asked with the host's own Plex key");
   assert.equal(party.q.id, "202");
@@ -652,8 +657,8 @@ test("watch party in the car: a Plex party streams through PlexDrive, shared per
   await fetch(`${srv.base}${media.car}/stream`, { headers: { cookie: member } }).then((x) => x.text());
   await fetch(`${srv.base}${media.car}/stream?solo=abc123`, { headers: { cookie: member } }).then((x) => x.text());
   const keys = asked.filter((a) => a.path === "/partner/party").map((a) => a.q.key);
-  assert.equal(keys[1], keys[0]);
-  assert.equal(keys[2], `${keys[0]}:abc123`);
+  assert.equal(keys.at(-2), keys[0]);
+  assert.equal(keys.at(-1), `${keys[0]}:abc123`);
 
   // Outsiders and stale choices get nothing.
   assert.equal((await srv.request("GET", `${media.car}/info`)).status, 401);

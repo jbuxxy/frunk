@@ -94,7 +94,7 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email invites. Port 465 uses implicit TLS; anything else uses STARTTLS. Without SMTP, invite links are copied for you to send. |
 | `PLEX_URL` | Your Plex server, e.g. `https://plex.example.com`, for the Watch Party. People connect by entering a code at plex.tv/link; Frunk keeps a token for this server only. |
 | `ABS_URL` | Your Audiobookshelf server, e.g. `https://abs.example.com`, for the Watch Party. People connect their own account to it with an API key; Frunk only ever talks to this address. |
-| `PLEXDRIVE_URL`, `PLEXDRIVE_SECRET` | Optional: a PlexDrive server on your LAN and its partner secret. In the Tesla, Plex parties then play on a canvas the car doesn't pause while driving, one shared stream per party. Without it the car uses the normal player, which Drive pauses. |
+| `PLEXDRIVE_URL`, `PLEXDRIVE_SECRET` | Optional: a PlexDrive server on your LAN and its partner secret. In the Tesla, Plex parties then play on a canvas the car doesn't pause while driving, one shared stream per party (H.264 from PlexDrive's iGPU at 720p on newer cars and 480p on older ones, MPEG-1 for cars that can't keep up). Without it the car uses the normal player, which Drive pauses. |
 | `PLEXDRIVE_PUBLIC_URL` | Optional: PlexDrive's public address, e.g. `https://plexdrive.example.com`. A PlexDrive tile then counts as Plex in a Watch Party: badged, and it opens the Plex picker. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
@@ -137,6 +137,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `public/vendor/hls.min.js` | [hls.js](https://github.com/video-dev/hls.js) 1.5.17, Apache-2.0 |
 | `public/car.js` | Watch Party in the Tesla: Plex parties on a canvas (via PlexDrive), in step with the party |
 | `public/vendor/jsmpeg.min.js` | [jsmpeg-player](https://github.com/cycjimmy/jsmpeg-player) 6.1.2 (JSMpeg), MIT |
+| `public/h264.js`, `public/h264-worker.js` | H.264 for the car player: a JSMpeg video decoder using WebCodecs or tinyh264 (shared with PlexDrive) |
+| `public/vendor/tinyh264/` | [tinyh264](https://github.com/udevbe/tinyh264) 0.0.7 (WebAssembly H.264 decoder, from h264bsd), Apache-2.0 |
 | `public/vendor/twemoji/` | Chat emoji from [Twemoji](https://github.com/jdecked/twemoji) 15.1.0, graphics CC-BY 4.0 |
 | `public/fonts/` | Inter and Rajdhani (Latin subset), SIL Open Font License |
 | `test/` | Unit, API and browser tests |
