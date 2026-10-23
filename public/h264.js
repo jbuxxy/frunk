@@ -17,6 +17,7 @@
      carNote(why, state) -> the note for FSP's Car check page
      snapshot(player, canvas) -> JPEG data URL of the current picture
      soundOptions(options) -> options for a JSMpeg.Player (MPEG-1), with pop-free sound
+     decodeMatrix() -> Promise<{ 'avc-high': 'hardware' | 'software' | 'no', … }>  (CODECS: the strings)
      createPlayer(url, options): JSMpeg.Player options as usual, plus:
        fps            the stream's constant frame rate
        backend        'webcodecs' | 'wasm' (from support())
@@ -251,6 +252,40 @@
   };
   WebCodecsBackend.prototype.destroy = function () { try { this.vd.close(); } catch (e) { /* closed */ } };
 
+  // ---------- what this browser can decode ----------
+  // For the car check and car notes (and later, playing a car's own copy of a title):
+  // each codec as 'hardware', 'software' or 'no', as the browser's WebCodecs reports it.
+  var CODECS = {
+    'avc-base': 'avc1.42E01F', 'avc-main': 'avc1.4D401F', 'avc-high': 'avc1.640028', 'avc-high41': 'avc1.640029',
+    'hevc': 'hvc1.1.6.L120.90', 'hevc-10': 'hvc1.2.4.L120.90', 'vp9': 'vp09.00.40.08', 'av1': 'av01.0.08M.08',
+  };
+  var matrix = null, matrixP = null;
+  function decodeMatrix() {
+    if (matrixP) return matrixP;
+    var VD = window.VideoDecoder;
+    if (!VD || !VD.isConfigSupported) { matrix = {}; return (matrixP = Promise.resolve(matrix)); }
+    var ask = function (codec, hw) {
+      var config = { codec: codec };
+      if (hw) config.hardwareAcceleration = 'prefer-hardware';
+      return VD.isConfigSupported(config).then(function (r) { return !!(r && r.supported); }, function () { return false; });
+    };
+    matrixP = Promise.all(Object.keys(CODECS).map(function (k) {
+      return Promise.all([ask(CODECS[k], false), ask(CODECS[k], true)]).then(function (r) { return [k, r[1] ? 'hardware' : r[0] ? 'software' : 'no']; });
+    })).then(function (list) {
+      matrix = {};
+      list.forEach(function (x) { matrix[x[0]] = x[1]; });
+      return matrix;
+    });
+    return matrixP;
+  }
+  // "avc-high:hw hevc-10:sw av1:no …", short enough for a car note.
+  function matrixText(m) {
+    if (!m) return undefined;
+    var keys = Object.keys(m);
+    if (!keys.length) return 'no webcodecs';
+    return keys.map(function (k) { return k + ':' + (m[k] === 'hardware' ? 'hw' : m[k] === 'software' ? 'sw' : 'no'); }).join(' ');
+  }
+
   // ---------- what a car plays: one policy for FSP's player and Frunk's car player ----------
 
   // { codec, q, backend } for this car: H.264 when the server can encode it (serverCodecs)
@@ -259,6 +294,7 @@
   // (saved.q), else 720p on newer cars (AMD) and 480p on older or unknown ones.
   function choose(serverCodecs, saved) {
     saved = saved || {};
+    decodeMatrix(); // ready by the time this car's first note is written
     return support().then(function (sup) {
       var backend = sup.webcodecs ? 'webcodecs' : sup.wasm ? 'wasm' : null;
       var h264 = !!backend && (serverCodecs || []).indexOf('h264') >= 0 && saved.codec !== 'mpeg1';
@@ -284,7 +320,7 @@
       kind: 'car-note', why: why, ua: navigator.userAgent, gpu: gpuName(), tier: carTier(),
       cores: navigator.hardwareConcurrency || null, decoder: s.codec === 'h264' ? s.backend : 'mpeg1',
       codec: s.codec, quality: s.q, sourceFps: s.fps || null, fps: secs ? +(s.frames / secs).toFixed(1) : 0,
-      seconds: Math.round(secs), sound: ctx ? ctx.state : 'none', title: s.title,
+      seconds: Math.round(secs), sound: ctx ? ctx.state : 'none', title: s.title, decodes: matrixText(matrix),
     };
   }
 
@@ -342,7 +378,7 @@
 
   window.H264 = {
     support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer,
-    choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot,
+    choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot, decodeMatrix: decodeMatrix, CODECS: CODECS,
     // For an MPEG-1 JSMpeg.Player: the same sound handling as createPlayer's.
     soundOptions: function (options) { cushionSound(); options.maxAudioLag = MAX_AUDIO_LAG; return options; },
   };

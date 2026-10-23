@@ -1291,7 +1291,7 @@ on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who 
 });
 // A party car's quiet note (car.js: after its first minute, and when it steps down),
 // kept by FSP with its own for the owner's Car check page. One a minute per person.
-const CAR_NOTE_FIELDS = ["why", "ua", "gpu", "tier", "cores", "decoder", "codec", "quality", "sourceFps", "fps", "seconds", "sound"];
+const CAR_NOTE_FIELDS = ["why", "ua", "gpu", "tier", "cores", "decoder", "codec", "quality", "sourceFps", "fps", "seconds", "sound", "decodes"];
 const carNotes = new Map(); // who -> last note time
 on("POST", "/api/party/:code/car/:load/note", "party", async ({ req, res, params, who }) => {
   const c = partner && parties.carFor(params.code, who, params.load);
