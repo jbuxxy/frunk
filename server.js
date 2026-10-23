@@ -770,7 +770,11 @@ function serveStatic(req, res, pathname) {
   fs.readFile(file, (err, buf) => {
     if (err) return json(res, 404, { error: "not found" });
     const ext = path.extname(file);
-    if (ext === ".html") buf = Buffer.from(buf.toString().replaceAll("__V__", ASSET_VERSION));
+    if (ext === ".html") {
+      // __ORIGIN__: absolute URLs for the link-preview tags (iMessage needs them absolute)
+      const origin = publicOrigin(req).replace(/[<>"&]/g, "");
+      buf = Buffer.from(buf.toString().replaceAll("__V__", ASSET_VERSION).replaceAll("__ORIGIN__", origin));
+    }
     res.writeHead(200, {
       ...SECURITY_HEADERS,
       "content-type": MIME[ext] || "application/octet-stream",
