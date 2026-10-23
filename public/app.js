@@ -532,6 +532,8 @@
     if (!site || tileMenu.open) return; // long-press can also fire contextmenu
     menuId = id;
     $("tileMenuName").textContent = site.name;
+    // Admins can copy their own tiles to other people (not tiles on the public default page).
+    $("tileMenuSend").hidden = !me.user?.admin || editTarget === "default";
     tileMenu.showModal();
   }
   $("tileMenuEdit").onclick = () => {
@@ -541,6 +543,10 @@
   $("tileMenuArrange").onclick = () => {
     tileMenu.close();
     setEditing(true);
+  };
+  $("tileMenuSend").onclick = () => {
+    tileMenu.close();
+    openSendTile(menuId);
   };
   $("tileMenuRemove").onclick = async () => {
     const site = sites.find((s) => s.id === menuId);
@@ -1165,6 +1171,73 @@
       toast(err.message);
     }
   };
+
+  // ---------- Admin: send a tile to other people's pages ----------
+  // People are big toggles; Send copies the tile onto each picked person's page.
+  const sendDialog = $("sendDialog");
+  const sendTo = new Set();
+  let sendTileId = null;
+  async function openSendTile(id) {
+    const site = sites.find((s) => s.id === id);
+    if (!site) return;
+    let data;
+    try {
+      data = await api("/api/admin/people");
+    } catch (err) {
+      return toast(err.message);
+    }
+    sendTileId = id;
+    sendTo.clear();
+    $("sendTitle").textContent = `Send ${site.name} to…`;
+    const others = data.users.filter((u) => u.email !== me.user.email);
+    $("sendHint").textContent = others.length
+      ? "It's added to the end of their page. They can move or remove it like any tile."
+      : "No one else has joined yet. Invite people from People in your account menu.";
+    const list = $("sendPeople");
+    list.replaceChildren();
+    for (const u of others) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "send-person";
+      b.setAttribute("aria-pressed", "false");
+      const text = document.createElement("span");
+      text.className = "send-person-text";
+      const name = document.createElement("span");
+      name.className = "person-name";
+      name.textContent = u.name || u.email;
+      const email = document.createElement("span");
+      email.className = "hint";
+      email.textContent = u.email;
+      text.append(name, email);
+      const check = document.createElement("span");
+      check.className = "send-check";
+      b.append(text, check);
+      b.onclick = () => {
+        if (sendTo.has(u.id)) sendTo.delete(u.id);
+        else sendTo.add(u.id);
+        b.setAttribute("aria-pressed", String(sendTo.has(u.id)));
+        updateSendButton();
+      };
+      list.append(b);
+    }
+    updateSendButton();
+    sendDialog.showModal();
+  }
+  function updateSendButton() {
+    $("sendGo").disabled = !sendTo.size;
+    $("sendGo").textContent = sendTo.size > 1 ? `Send to ${sendTo.size} people` : "Send";
+  }
+  // "Ana", "Ana and Bo", "Ana, Bo and Cy"
+  const nameList = (names) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`);
+  $("sendGo").onclick = () => pressed($("sendGo"), async () => {
+    const r = await api("/api/admin/send-tile", { method: "POST", body: JSON.stringify({ tile: sendTileId, to: [...sendTo] }) });
+    sendDialog.close();
+    const parts = [];
+    if (r.sent.length) parts.push(`Sent to ${nameList(r.sent)}`);
+    if (r.had.length) parts.push(`${nameList(r.had)} already ${r.had.length === 1 ? "has" : "have"} it`);
+    if (r.full.length) parts.push(`${nameList(r.full)} ${r.full.length === 1 ? "has" : "have"} a full page`);
+    toast(parts.join(" · ") || "Nothing was sent", 4000);
+  });
 
   // ---------- Add / edit dialog ----------
   const urlInput = siteForm.querySelector("[name=url]");

@@ -26,6 +26,7 @@ test("who can call what", async (t) => {
     ["POST", "/api/admin/invites", { email: "bad" }, 401, 403, 400],
     ["POST", `/api/admin/invites/${invite.body.token}/resend`, {}, 401, 403, 502], // no SMTP set up
     ["DELETE", "/api/admin/users/nobody", undefined, 401, 403, 400],
+    ["POST", "/api/admin/send-tile", { tile: "nope", to: [] }, 401, 403, 400],
     ["GET", "/api/party/sources", undefined, 401, 200, 200],
     ["POST", "/api/party/ZZZZ/join", {}, 401, 404, 404],
     ["GET", "/api/party/ZZZZ/events/nobody", undefined, 401, 404, 404],
@@ -276,6 +277,36 @@ test("invites and people", async (t) => {
   assert.equal((await srv.request("DELETE", `/api/admin/users/${ownerId}`, { cookie: admin })).status, 400);
   assert.equal((await srv.request("DELETE", `/api/admin/users/${memberId}`, { cookie: admin })).status, 200);
   assert.equal((await srv.request("GET", "/api/me", { cookie: member })).body.user, null);
+});
+
+test("admins send one of their tiles to other people's pages", async (t) => {
+  const { srv, admin, member } = await serverWithPeople();
+  t.after(() => srv.stop());
+  const add = { name: "PlexDrive", url: "https://plexdrive.example/" };
+  const mine = (await srv.request("PUT", "/api/sites", { cookie: admin, body: [add] })).body;
+  const people = (await srv.request("GET", "/api/admin/people", { cookie: admin })).body;
+  const memberId = people.users.find((u) => u.email === "member@example.com").id;
+  const ownerId = people.users.find((u) => u.email === "owner@example.com").id;
+  const send = (body) => srv.request("POST", "/api/admin/send-tile", { cookie: admin, body });
+
+  // Sent once: a copy (new id) lands at the end of their page; yourself is ignored.
+  const before = (await srv.request("GET", "/api/sites", { cookie: member })).body.length;
+  const first = await send({ tile: mine[0].id, to: [memberId, ownerId] });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.sent.length, 1);
+  const theirs = (await srv.request("GET", "/api/sites", { cookie: member })).body;
+  assert.equal(theirs.length, before + 1);
+  assert.equal(theirs.at(-1).url, add.url);
+  assert.notEqual(theirs.at(-1).id, mine[0].id);
+
+  // Sending it again doesn't duplicate it.
+  const again = await send({ tile: mine[0].id, to: [memberId] });
+  assert.deepEqual([again.body.sent.length, again.body.had.length], [0, 1]);
+  assert.equal((await srv.request("GET", "/api/sites", { cookie: member })).body.length, before + 1);
+
+  // Only tiles from your own page, and someone to send to.
+  assert.equal((await send({ tile: theirs.at(-1).id, to: [memberId] })).status, 400);
+  assert.equal((await send({ tile: mine[0].id, to: [] })).status, 400);
 });
 
 test("a FRUNK_OWNER_EMAIL that isn't a full address doesn't crash startup", async (t) => {

@@ -1030,6 +1030,28 @@ on("DELETE", "/api/admin/users/:id", "admin", ({ res, params }) => {
   if (!accounts.deleteUser(params.id)) return json(res, 400, { error: "Can't remove that account." });
   return json(res, 200, { ok: true });
 });
+// Copy one of the admin's own tiles onto other people's pages, at the end.
+// Anyone who already has a tile for that address is skipped (had), as is a
+// page already at the 200-tile limit (full).
+on("POST", "/api/admin/send-tile", "admin", async ({ req, res, user }) => {
+  const { tile, to } = (await readBody(req)) || {};
+  const site = user.sites.find((s) => s.id === tile);
+  if (!site) return json(res, 400, { error: "That tile isn't on your page." });
+  if (!Array.isArray(to) || !to.length) return json(res, 400, { error: "Pick who to send it to." });
+  const result = { sent: [], had: [], full: [] };
+  for (const id of new Set(to)) {
+    const target = userById(id);
+    if (!target || target.id === user.id) continue;
+    const label = target.name || target.email;
+    if (target.sites.some((s) => s.url === site.url)) result.had.push(label);
+    else if (target.sites.length >= 200) result.full.push(label);
+    else {
+      accounts.setSites(target, [...target.sites, { ...site, id: crypto.randomUUID() }]);
+      result.sent.push(label);
+    }
+  }
+  return json(res, 200, result);
+});
 
 // ---------- Watch Party ----------
 // What a host can play: their connected apps (on servers named in the

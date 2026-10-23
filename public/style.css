@@ -376,6 +376,22 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 .code-input { text-align: center; text-transform: uppercase; font-family: var(--display) !important; font-weight: 700; font-size: 34px !important; letter-spacing: .25em; }
 
 /* Invite: starter tiles */
+/* Admin: send a tile. People are big toggles with a check on the right. */
+.send-people { display: flex; flex-direction: column; gap: 10px; margin: 16px 0 20px; max-height: 46vh; overflow-y: auto; }
+.send-person {
+  display: flex; align-items: center; gap: 16px; width: 100%; min-height: 72px; padding: 12px 18px 12px 20px;
+  border: 2px solid transparent; border-radius: 16px; background: var(--bg); color: inherit; font: inherit;
+  text-align: left; cursor: pointer; transition: border-color .15s;
+}
+.send-person:active { transform: scale(.98); }
+.send-person-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.send-person .hint { margin-top: 2px; overflow-wrap: anywhere; }
+.send-check { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; }
+.send-person[aria-pressed="true"] { border-color: var(--accent); }
+.send-person[aria-pressed="true"] .send-check { background: var(--accent); border-color: var(--accent); }
+.send-person[aria-pressed="true"] .send-check::after {
+  content: ""; width: 12px; height: 7px; border: solid #fff; border-width: 0 0 3px 3px; transform: translateY(-2px) rotate(-45deg);
+}
 .invite-tiles-label { margin-top: 18px; }
 .invite-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-bottom: 8px; }
 .invite-tile {

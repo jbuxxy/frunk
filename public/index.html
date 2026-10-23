@@ -185,8 +185,22 @@
       <div class="menu">
         <button type="button" class="pill" id="tileMenuEdit">Edit</button>
         <button type="button" class="pill" id="tileMenuArrange">Rearrange tiles</button>
+        <button type="button" class="pill" id="tileMenuSend" hidden>Send to someone…</button>
         <button type="button" class="pill danger" id="tileMenuRemove">Remove</button>
         <button type="button" class="pill" id="tileMenuCancel" data-close>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Admin: send a tile to other people's pages -->
+  <dialog class="sheet narrow" id="sendDialog">
+    <form method="dialog">
+      <h2 id="sendTitle"></h2>
+      <p class="hint" id="sendHint"></p>
+      <div class="send-people" id="sendPeople"></div>
+      <div class="menu">
+        <button type="button" class="pill accent" id="sendGo" disabled>Send</button>
+        <button type="button" class="pill" data-close>Cancel</button>
       </div>
     </form>
   </dialog>
