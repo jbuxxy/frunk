@@ -271,11 +271,38 @@
     img.alt = "";
     img.src = iconSrc(site);
     img.onload = () => {
+      // A logo on a transparent background (an SVG mark, a cut-out PNG) goes straight on
+      // the card, which takes its color like the logos above; a square app icon, with
+      // its own background, stays a badge.
+      if (clearCorners(img)) {
+        img.className = "custom-logo";
+        badge.replaceWith(img);
+        if (tile && !site.color) {
+          const t = tintOf(img, img.src);
+          tile.style.setProperty("--card", t.bg);
+          tile.style.color = t.fg;
+        }
+        return;
+      }
       badge.textContent = "";
       badge.classList.add("loaded");
       badge.append(img);
     };
     return badge;
+  }
+
+  // Whether an image's four corners are see-through.
+  function clearCorners(img) {
+    try {
+      const n = 32;
+      const c = document.createElement("canvas");
+      c.width = c.height = n;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, n, n);
+      return [[0, 0], [n - 1, 0], [0, n - 1], [n - 1, n - 1]].every(([x, y]) => ctx.getImageData(x, y, 1, 1).data[3] < 24);
+    } catch {
+      return false;
+    }
   }
 
   function render() {

@@ -376,6 +376,7 @@
   function show(full) {
     view.hidden = false;
     view.classList.toggle("mini", !full);
+    layout();
     document.body.classList.add("in-party");
     wake();
   }
@@ -447,7 +448,10 @@
   function wake() {
     view.classList.remove("idle");
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { if (party && party.state.playing && $("partyChat").hidden) view.classList.add("idle"); }, 4000);
+    // Not when stacked: the controls sit under the picture there, not over it.
+    idleTimer = setTimeout(() => {
+      if (party && party.state.playing && $("partyChat").hidden && !view.classList.contains("stacked")) view.classList.add("idle");
+    }, 4000);
   }
   view.addEventListener("pointerdown", wake);
 
@@ -965,9 +969,16 @@
     view.classList.remove("chatting");
   }
   $("partyChatBtn").onclick = () => ($("partyChat").hidden ? openChat() : closeChat());
-  // A phone held upright: video on top, then the controls, then chat, always open.
+  // A phone held upright: video on top, then the controls, then chat, always open
+  // (.stacked; not while minimized, which is its own small player).
   const portraitPhone = matchMedia("(max-width: 640px) and (orientation: portrait)");
-  const chatForLayout = () => { if (session) (portraitPhone.matches ? openChat() : closeChat()); };
+  function layout() {
+    view.classList.toggle("stacked", portraitPhone.matches && !view.classList.contains("mini"));
+  }
+  const chatForLayout = () => {
+    layout();
+    if (session) (portraitPhone.matches ? openChat() : closeChat());
+  };
   portraitPhone.addEventListener?.("change", chatForLayout);
 
   // ---------- The ⋯ menu (phones): the top bar's less-used buttons ----------

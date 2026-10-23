@@ -41,32 +41,22 @@ window.frunkCar = (() => {
   let noteStart = 0; // this stream's first picture
   let noted = false;
   function carNote(why) {
-    if (!base || !info) return;
+    if (!base || !info || !window.H264) return;
     if (why === "first minute" && keep.get("frunk-carnote")) return;
-    const secs = noteStart ? (Date.now() - noteStart) / 1000 : 0;
-    const ctx = player && player.audioOut && player.audioOut.context;
-    const note = {
-      why, ua: navigator.userAgent, gpu: window.H264 ? window.H264.gpuName() : null, tier: window.H264 ? window.H264.carTier() : null,
-      cores: navigator.hardwareConcurrency || null, decoder: codec === "h264" ? backend : "mpeg1", codec, quality,
-      sourceFps: info.fps || null, fps: secs ? +(frames / secs).toFixed(1) : 0, seconds: Math.round(secs),
-      sound: ctx ? ctx.state : "none",
-    };
+    const note = window.H264.carNote(why, { codec, backend, q: quality, fps: info.fps, frames, since: noteStart, player });
     f.api(`${base}/note`, { method: "POST", body: JSON.stringify(note), keepalive: true }).catch(() => {});
     if (why === "first minute") keep.set("frunk-carnote", "1");
   }
+  // A step down (H264.nextStep, shared with FSP's player), at most one per 15 s.
   function stepDown() {
-    if (Date.now() - steppedAt < 15_000) return;
+    const next = window.H264.nextStep({ codec, q: quality });
+    if (!next || Date.now() - steppedAt < 15_000) return;
     steppedAt = Date.now();
     carNote("stepped down");
-    if (codec === "h264" && quality > 480) {
-      quality = 480;
-      keep.set("frunk-car-q", "480");
-      f.toast("The car is falling behind at 720p, so switching to 480p", 4000);
-    } else if (codec === "h264") {
-      codec = "mpeg1";
-      keep.set("frunk-car-codec", "mpeg1");
-      f.toast("Switching to the lighter video format for this car", 4000);
-    } else return;
+    if (next.q !== quality) keep.set("frunk-car-q", String(next.q));
+    if (next.codec !== codec) keep.set("frunk-car-codec", next.codec);
+    ({ codec, q: quality } = next);
+    f.toast(next.message, 4000);
     stop(true);
     open(false); // the party's shared stream for the new setting
   }
@@ -129,7 +119,8 @@ window.frunkCar = (() => {
     if (player) {
       // A destroyed player blanks its canvas, so keep the last picture as a still.
       if (keepPicture && canvas && frames) {
-        try { box.style.backgroundImage = `url(${canvas.toDataURL("image/jpeg", 0.85)})`; } catch {}
+        const still = window.H264.snapshot(player, canvas);
+        if (still) box.style.backgroundImage = `url(${still})`;
       }
       try { player.destroy(); } catch {}
       player = null;
@@ -169,7 +160,7 @@ window.frunkCar = (() => {
     );
     const options = {
       source: Source, canvas, audio: true, video: true,
-      pauseWhenHidden: false, preserveDrawingBuffer: true,
+      pauseWhenHidden: false, preserveDrawingBuffer: false,
       videoBufferSize: 4 * 1024 * 1024, audioBufferSize: 512 * 1024,
       fps: (info && info.fps) || 30, backend,
       onBehind: () => { if (canvas === me) stepDown(); },
@@ -211,14 +202,11 @@ window.frunkCar = (() => {
       } catch (err) {
         f.toast(err.message, 5000);
       }
-      // H.264 when FSP can encode it and this browser can decode it.
+      // What this car plays (H264.choose, shared with FSP's player).
       codec = "mpeg1";
       try {
         await loadJsmpeg();
-        const sup = await window.H264.support();
-        backend = sup.webcodecs ? "webcodecs" : sup.wasm ? "wasm" : null;
-        if (backend && info && (info.codecs || []).includes("h264")) codec = keep.get("frunk-car-codec") || "h264";
-        quality = Number(keep.get("frunk-car-q")) || (window.H264.carTier() === "new" ? 720 : 480);
+        ({ codec, q: quality, backend } = await window.H264.choose(info && info.codecs, { codec: keep.get("frunk-car-codec"), q: keep.get("frunk-car-q") }));
       } catch {}
       if (base === mine) ready = true;
     },

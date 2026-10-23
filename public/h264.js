@@ -11,6 +11,11 @@
    window.H264 = {
      support(): Promise<{ webcodecs, wasm }>   which backends work here (cached)
      carTier(): 'new' | 'old' | 'unknown'      Tesla MCU3 (AMD) vs MCU2 (Intel), by GPU
+     gpuName()                                 the GPU's name (WebGL), or null
+     choose(serverCodecs, saved) -> Promise<{ codec, q, backend }>   what this car plays
+     nextStep({ codec, q }) -> { codec, q, message } | null          a car falling behind
+     carNote(why, state) -> the note for FSP's Car check page
+     snapshot(player, canvas) -> JPEG data URL of the current picture
      createPlayer(url, options): JSMpeg.Player options as usual, plus:
        fps            the stream's constant frame rate
        backend        'webcodecs' | 'wasm' (from support())
@@ -245,6 +250,56 @@
   };
   WebCodecsBackend.prototype.destroy = function () { try { this.vd.close(); } catch (e) { /* closed */ } };
 
+  // ---------- what a car plays: one policy for FSP's player and Frunk's car player ----------
+
+  // { codec, q, backend } for this car: H.264 when the server can encode it (serverCodecs)
+  // and this browser can decode it (WebCodecs, else WebAssembly), unless this car had to
+  // fall back before (saved.codec 'mpeg1'); MPEG-1 otherwise. Quality: the car's own
+  // (saved.q), else 720p on newer cars (AMD) and 480p on older or unknown ones.
+  function choose(serverCodecs, saved) {
+    saved = saved || {};
+    return support().then(function (sup) {
+      var backend = sup.webcodecs ? 'webcodecs' : sup.wasm ? 'wasm' : null;
+      var h264 = !!backend && (serverCodecs || []).indexOf('h264') >= 0 && saved.codec !== 'mpeg1';
+      return { codec: h264 ? 'h264' : 'mpeg1', q: Number(saved.q) || (carTier() === 'new' ? 720 : 480), backend: backend };
+    });
+  }
+
+  // For a car falling behind: 720p, then 480p, then MPEG-1 (lighter to decode, heavier
+  // for the server), with what to tell the driver; null when there's nothing lighter.
+  // (Callers space these out, so one bad moment isn't three steps.)
+  function nextStep(cur) {
+    if (cur.codec === 'h264' && cur.q > 480) return { codec: 'h264', q: 480, message: 'The car is falling behind at ' + cur.q + 'p, so switching to 480p' };
+    if (cur.codec === 'h264') return { codec: 'mpeg1', q: cur.q, message: 'Switching to the lighter video format for this car' };
+    return null;
+  }
+
+  // A car's quiet note for FSP's Car check page. s: { codec, backend, q, fps (the
+  // source's), frames, since (the stream's first picture), player, title }.
+  function carNote(why, s) {
+    var secs = s.since ? (Date.now() - s.since) / 1000 : 0;
+    var ctx = s.player && s.player.audioOut && s.player.audioOut.context;
+    return {
+      kind: 'car-note', why: why, ua: navigator.userAgent, gpu: gpuName(), tier: carTier(),
+      cores: navigator.hardwareConcurrency || null, decoder: s.codec === 'h264' ? s.backend : 'mpeg1',
+      codec: s.codec, quality: s.q, sourceFps: s.fps || null, fps: secs ? +(s.frames / secs).toFixed(1) : 0,
+      seconds: Math.round(secs), sound: ctx ? ctx.state : 'none', title: s.title,
+    };
+  }
+
+  // The picture on a player's canvas as a JPEG data URL, for a still while it restarts.
+  // Canvases aren't kept once shown (preserveDrawingBuffer off saves the GPU a copy of
+  // every frame), so a WebGL one draws its last frame again first, in the same task.
+  function snapshot(player, canvas) {
+    try {
+      var r = player && (player.renderer || (player.video && player.video.ownRenderer));
+      if (r && r.gl) r.gl.drawArrays(r.gl.TRIANGLE_STRIP, 0, 4);
+      return canvas.toDataURL('image/jpeg', 0.85);
+    } catch (e) {
+      return null;
+    }
+  }
+
   // ---------- a JSMpeg player with this decoder ----------
   function createPlayer(url, options) {
     var opts = {};
@@ -262,5 +317,8 @@
     return player;
   }
 
-  window.H264 = { support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer };
+  window.H264 = {
+    support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer,
+    choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot,
+  };
 })();

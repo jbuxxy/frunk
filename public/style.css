@@ -567,7 +567,7 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
   border-radius: 20px; overflow: hidden;
   box-shadow: 0 16px 48px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.1);
 }
-.party.mini > :not(video):not(.party-car):not(.party-mini-bar):not(.party-art) { display: none !important; }
+.party.mini > :not(video):not(.party-car):not(.party-mini-bar):not(.party-art) { display: none; }
 .party.mini .party-art { padding: 16px; gap: 16px; justify-content: flex-start; }
 .party.mini .party-art img { width: auto; height: 100%; max-height: none; }
 .party.mini .party-art > div { display: none; }
@@ -930,58 +930,56 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
   .party-more-menu .pill { min-height: 56px; }
 }
 
-/* Upright: video on top, the controls under it, then chat */
-@media (max-width: 640px) and (orientation: portrait) {
-  .party:not(.mini) {
-    display: grid; grid-template-columns: 100%; grid-template-rows: auto auto auto auto minmax(0, 1fr);
-    --stage-top: calc(64px + env(safe-area-inset-top, 0px));
-  }
-  .party:not(.mini) .party-top { grid-row: 1; position: static; padding-bottom: 10px; background: none; }
-  .party:not(.mini) > video, .party:not(.mini) .party-car, .party:not(.mini) .party-art, .party:not(.mini) .party-empty, .party:not(.mini) .party-tap {
-    grid-row: 2; grid-column: 1; position: relative; inset: auto; transform: none;
-  }
-  .party:not(.mini) > video, .party:not(.mini) .party-car { width: 100%; height: auto; aspect-ratio: 16 / 9; }
-  .party:not(.mini) .party-empty { align-self: center; justify-self: center; left: auto; top: auto; width: calc(100% - 32px); padding: 18px 0; font-size: 18px; }
-  .party:not(.mini) .party-tap { align-self: center; justify-self: center; left: auto; top: auto; }
-  .party:not(.mini).audio .party-art { flex-direction: row; justify-content: flex-start; gap: 16px; padding: 8px 16px; text-align: left; }
-  .party:not(.mini).audio .party-art img { width: 120px; height: 120px; max-height: none; }
-  .party:not(.mini).audio .party-art h3 { font-size: 24px; }
-  .party:not(.mini).audio .party-art p { font-size: 16px; margin-top: 6px; }
-  .party:not(.mini).audio > video { display: none; }
-  .party:not(.mini) .party-away, .party:not(.mini) .party-talking { top: calc(var(--stage-top) + 10px); }
-  .party:not(.mini) .party-controls {
-    grid-row: 3; position: static; background: none; padding: 12px 16px 6px; gap: 10px; right: 0 !important;
-    display: flex !important; flex-wrap: wrap; justify-content: center;
-  }
-  .party:not(.mini) .party-seek { flex-basis: 100%; order: -2; height: 32px; }
-  .party:not(.mini) .party-time { flex-basis: 100%; order: -1; margin-top: -6px; text-align: right; font-size: 14px; }
-  .party:not(.mini) .party-controls .icon-btn { width: 52px; height: 52px; }
-  .party:not(.mini) .party-play { width: 64px; height: 64px; }
-  .party:not(.mini) .party-talk { min-width: 0; padding: 0 18px; }
-  .party:not(.mini) #partyChoose { padding: 0 18px; }
-  .party:not(.mini) .party-reacts { flex-basis: 100%; justify-content: space-between; margin-top: 4px; }
-  .party:not(.mini) .party-react { width: 44px; height: 44px; }
-  .party:not(.mini) .party-who { grid-row: 4; position: static; padding: 0 16px 4px; }
-  .party:not(.mini) .party-who:empty { display: none; }
-  .party:not(.mini) .party-chat {
-    grid-row: 5; position: relative; inset: auto; width: auto; height: auto; min-height: 0;
-    margin: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px)); border-radius: 22px; box-shadow: none;
-    background: var(--sheet);
-  }
-  .party:not(.mini) .party-chat-head { padding: 12px 12px 4px 18px; }
-  .party:not(.mini) .party-chat-head h3 { font-size: 18px; }
-  .party:not(.mini) .party-chat-head .icon-btn { width: 40px; height: 40px; }
-  .party:not(.mini) .party-chat-head .icon-btn svg { width: 20px; height: 20px; }
-  .party:not(.mini) #partyChatClose, .party:not(.mini) .party-chat-btn { display: none; }
-  .party:not(.mini) .party-chat-list { padding: 6px 18px; gap: 12px; }
-  .party:not(.mini) .party-msg p { font-size: 16px; }
-  .party:not(.mini) .party-chat-form { padding: 6px 10px 10px; }
-  .party:not(.mini) .party-chat-form input { min-height: 48px; font-size: 16px; }
-  .party:not(.mini) .party-chat-form .pill { min-height: 48px; padding: 0 16px; font-size: 15px; }
-  .party.idle .party-top, .party.idle .party-controls, .party.idle .party-who { opacity: 1 !important; pointer-events: auto !important; }
-  .party.idle { cursor: auto; }
-  .party:not(.mini) .party-float { bottom: auto; top: calc(var(--stage-top) + 30vw); }
+/* Upright on a phone (.stacked, set by party.js): the video on top, the controls under
+   it, then chat. Its own layout, after the overlay rules so it wins where they meet;
+   the controls never fade here, so there's no idle to undo. */
+.party.stacked {
+  display: grid; grid-template-columns: 100%; grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  --stage-top: calc(64px + env(safe-area-inset-top, 0px));
 }
+.party.stacked .party-top { grid-row: 1; position: static; padding-bottom: 10px; background: none; }
+.party.stacked > video, .party.stacked .party-car, .party.stacked .party-art, .party.stacked .party-empty, .party.stacked .party-tap {
+  grid-row: 2; grid-column: 1; position: relative; inset: auto; transform: none;
+}
+.party.stacked > video, .party.stacked .party-car { width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.party.stacked .party-empty { align-self: center; justify-self: center; left: auto; top: auto; width: calc(100% - 32px); padding: 18px 0; font-size: 18px; }
+.party.stacked .party-tap { align-self: center; justify-self: center; left: auto; top: auto; }
+.party.stacked.audio .party-art { flex-direction: row; justify-content: flex-start; gap: 16px; padding: 8px 16px; text-align: left; }
+.party.stacked.audio .party-art img { width: 120px; height: 120px; max-height: none; }
+.party.stacked.audio .party-art h3 { font-size: 24px; }
+.party.stacked.audio .party-art p { font-size: 16px; margin-top: 6px; }
+.party.stacked.audio > video { display: none; }
+.party.stacked .party-away, .party.stacked .party-talking { top: calc(var(--stage-top) + 10px); }
+.party.stacked .party-controls {
+  grid-row: 3; position: static; background: none; padding: 12px 16px 6px; gap: 10px; right: 0;
+  display: flex; flex-wrap: wrap; justify-content: center;
+}
+.party.stacked .party-seek { flex-basis: 100%; order: -2; height: 32px; }
+.party.stacked .party-time { flex-basis: 100%; order: -1; margin-top: -6px; text-align: right; font-size: 14px; }
+.party.stacked .party-controls .icon-btn { width: 52px; height: 52px; }
+.party.stacked .party-play { width: 64px; height: 64px; }
+.party.stacked .party-talk { min-width: 0; padding: 0 18px; }
+.party.stacked #partyChoose { padding: 0 18px; }
+.party.stacked .party-reacts { flex-basis: 100%; justify-content: space-between; margin-top: 4px; }
+.party.stacked .party-react { width: 44px; height: 44px; }
+.party.stacked .party-who { grid-row: 4; position: static; padding: 0 16px 4px; }
+.party.stacked .party-who:empty { display: none; }
+.party.stacked .party-chat {
+  grid-row: 5; position: relative; inset: auto; width: auto; height: auto; min-height: 0;
+  margin: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px)); border-radius: 22px; box-shadow: none;
+  background: var(--sheet);
+}
+.party.stacked .party-chat-head { padding: 12px 12px 4px 18px; }
+.party.stacked .party-chat-head h3 { font-size: 18px; }
+.party.stacked .party-chat-head .icon-btn { width: 40px; height: 40px; }
+.party.stacked .party-chat-head .icon-btn svg { width: 20px; height: 20px; }
+.party.stacked #partyChatClose, .party.stacked .party-chat-btn { display: none; }
+.party.stacked .party-chat-list { padding: 6px 18px; gap: 12px; }
+.party.stacked .party-msg p { font-size: 16px; }
+.party.stacked .party-chat-form { padding: 6px 10px 10px; }
+.party.stacked .party-chat-form input { min-height: 48px; font-size: 16px; }
+.party.stacked .party-chat-form .pill { min-height: 48px; padding: 0 16px; font-size: 15px; }
+.party.stacked .party-float { bottom: auto; top: calc(var(--stage-top) + 30vw); }
 
 /* Sideways: the overlay layout, trimmed for a short screen */
 @media (max-height: 500px) and (orientation: landscape) {
