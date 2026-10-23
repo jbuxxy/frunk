@@ -34,7 +34,7 @@
       <button class="pill party-join" id="partyJoinBtn" hidden><span class="party-dot live" id="partyJoinDot"></span><span id="partyJoinText"></span></button>
       <button class="pill" id="partyHostBtn" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/></svg>
-        Watch Party
+        <span class="label-long">Watch Party</span><span class="label-short">Party</span>
       </button>
       <button class="pill fs-btn" id="fsBtn" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
@@ -90,6 +90,9 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <button class="pill danger" id="partyLeave">Leave</button>
+      <button class="icon-btn party-more" id="partyMore" aria-label="More">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+      </button>
     </div>
     <p class="party-away" id="partyAway" hidden></p>
     <p class="party-talking" id="partyTalking" hidden></p>
@@ -391,10 +394,13 @@
   </dialog>
 
   <!-- Watch Party: what to play -->
-  <dialog class="sheet party-pick" id="partyPicker">
+  <dialog class="sheet party-pick" id="partyPicker" aria-label="Choose what to play">
     <form method="dialog" id="partyPickForm">
-      <h2 tabindex="-1" autofocus>Choose what to play</h2>
-      <div class="party-tabs" id="partyTabs"></div>
+      <div class="pick-head">
+        <div class="pick-tabs" id="partyTabs" role="tablist" aria-label="Apps"></div>
+        <input name="q" type="search" class="party-search" placeholder="Search" autocomplete="off" enterkeyhint="search" aria-label="Search">
+        <button type="button" class="sheet-x pick-x" data-close aria-label="Close">&times;</button>
+      </div>
       <div class="party-where">
         <button type="button" class="pill small" id="partyPickBack" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
@@ -402,9 +408,7 @@
         </button>
         <span id="partyPickWhere"></span>
       </div>
-      <input name="q" type="search" class="party-search" placeholder="Search" autocomplete="off" enterkeyhint="search">
-      <div class="party-results" id="partyPickList"></div>
-      <div class="sheet-actions"><span class="spacer"></span><button type="button" class="pill" data-close>Cancel</button></div>
+      <div class="pick-body" id="partyPickList"></div>
     </form>
   </dialog>
 
@@ -428,6 +432,20 @@
         <span class="spacer"></span>
         <button type="button" class="pill" data-close>Cancel</button>
         <button type="button" class="pill accent" id="partySetupStart">Start</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Watch Party on a phone: the party's less-used buttons -->
+  <dialog class="sheet narrow" id="partyMoreDialog">
+    <form method="dialog">
+      <div class="menu party-more-menu">
+        <button type="button" class="pill" id="partyMoreInvite">Invite · Code <b id="partyMoreCode"></b></button>
+        <button type="button" class="pill" id="partyMoreSettings">Party settings</button>
+        <button type="button" class="pill" id="partyMoreFullscreen" hidden>Fullscreen</button>
+        <button type="button" class="pill" id="partyMoreMinimize">Back to my apps</button>
+        <button type="button" class="pill danger" id="partyMoreLeave">Leave</button>
+        <button type="button" class="pill" data-close>Cancel</button>
       </div>
     </form>
   </dialog>

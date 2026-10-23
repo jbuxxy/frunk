@@ -85,7 +85,7 @@ function createAbs(baseUrl) {
     return res.json();
   }
   const author = (m) => m.authorName || (m.authors || []).map((a) => a.name).join(", ");
-  const toItem = (li) => ({ id: li.id, title: li.media.metadata.title || "Untitled", subtitle: author(li.media.metadata), kind: "audio", art: true });
+  const toItem = (li) => ({ id: li.id, title: li.media.metadata.title || "Untitled", subtitle: author(li.media.metadata), kind: "audio", art: true, shape: "square" });
   async function bookLibraries(token) {
     const { libraries } = await call(token, "/api/libraries");
     return libraries.filter((l) => l.mediaType === "book");
@@ -97,6 +97,7 @@ function createAbs(baseUrl) {
     connect: "key",
     help: "In Audiobookshelf, open Settings → API Keys, add a key, and paste it here.",
     hosts: [new URL(base).hostname],
+    dash: "audiobookshelf", // its logo, for the picker's tab
     // { token, account } for a key that works; throws otherwise.
     async connectKey(token) {
       const me = await call(token, "/api/me");
@@ -144,7 +145,7 @@ function createAbs(baseUrl) {
 // token for this one server (not the whole Plex account), so it works for
 // people the server is shared with too. Everyone in a party watches one
 // transcode session: Plex works once, Frunk hands the pieces out.
-function createPlex(baseUrl, plexTv = "https://plex.tv", extraHosts = []) {
+function createPlex(baseUrl, plexTv = "https://plex.tv") {
   const base = baseUrl.replace(/\/$/, "");
   // Plex knows each app by an id; this one is fixed per Frunk server.
   const client = `frunk-${crypto.createHash("sha256").update(base).digest("hex").slice(0, 16)}`;
@@ -166,7 +167,34 @@ function createPlex(baseUrl, plexTv = "https://plex.tv", extraHosts = []) {
 
   // Folders (shows, seasons, artists, albums) open; the rest play.
   const FOLDERS = ["show", "season", "artist", "album"];
-  function toItem(m) {
+  // How the picker draws each: posters for movies, shows and seasons, a wide
+  // still for episodes, square covers for music.
+  const SHAPES = { movie: "poster", show: "poster", season: "poster", episode: "wide", artist: "square", album: "square", track: "square" };
+  // wide: as a Continue watching card (a movie's backdrop, an episode's still).
+  // inShow: an episode listed in its season ("Episode 3 · 42 min").
+  function toItem(m, { wide = false, inShow = false } = {}) {
+    const item = baseItem(m);
+    item.shape = SHAPES[m.type] || "square";
+    item.img = "thumb";
+    const minutes = m.duration ? Math.round(m.duration / 60000) : 0;
+    if (m.year) item.year = m.year;
+    if (minutes) item.minutes = minutes;
+    if (m.viewOffset && m.duration) item.progress = Math.round(Math.min(1, m.viewOffset / m.duration) * 1000) / 1000;
+    if (m.librarySectionID != null) item.section = String(m.librarySectionID);
+    if (m.type === "episode" && inShow) item.subtitle = [m.index != null && `Episode ${m.index}`, minutes && `${minutes} min`].filter(Boolean).join(" · ");
+    if (wide) {
+      if (m.type === "episode") {
+        item.title = m.grandparentTitle || item.title;
+        item.subtitle = [m.parentIndex != null && m.index != null && `S${m.parentIndex}E${m.index}`, m.title].filter(Boolean).join(" · ");
+      } else if (m.art) {
+        item.img = "art";
+        item.art = true;
+      }
+      item.shape = "wide";
+    }
+    return item;
+  }
+  function baseItem(m) {
     const kind = FOLDERS.includes(m.type) ? "folder" : m.type === "track" ? "audio" : "video";
     const ep = m.type === "episode" && m.parentIndex != null ? ` · S${m.parentIndex}E${m.index}` : "";
     const subtitle = {
@@ -187,8 +215,9 @@ function createPlex(baseUrl, plexTv = "https://plex.tv", extraHosts = []) {
     name: "Plex",
     connect: "link",
     linkAt: "plex.tv/link", // where the code is entered
-    // Your Plex tile, the Plex web app, and FSP (the car player for Plex), if set up.
-    hosts: [new URL(base).hostname, "app.plex.tv", ...extraHosts],
+    // Your Plex tile and the Plex web app.
+    hosts: [new URL(base).hostname, "app.plex.tv"],
+    dash: "plex",
     link: {
       async start() {
         const pin = await call(`${plexTv}/api/v2/pins`, null, { method: "POST" });
@@ -206,32 +235,37 @@ function createPlex(baseUrl, plexTv = "https://plex.tv", extraHosts = []) {
         return { token: server.accessToken, account: user.username || user.title || "your account" };
       },
     },
-    // Top level: continue watching and each movie, TV and music library.
-    // in: a folder to open ("deck", "s<section>", or an item id).
+    // Top level: what you were watching (group "Continue watching"), then each
+    // movie, TV and music library (group "Libraries"). in: a folder to open
+    // ("s<section>", or an item id).
     async browse(token, q, folder) {
       if (q) {
         const found = await library(token, `/hubs/search?${new URLSearchParams({ query: q, limit: "10" })}`);
-        return (found.Hub || []).flatMap((h) => h.Metadata || []).filter((m) => PLAYABLE.includes(m.type)).slice(0, 48).map(toItem);
+        return (found.Hub || []).flatMap((h) => h.Metadata || []).filter((m) => PLAYABLE.includes(m.type)).slice(0, 48).map((m) => toItem(m));
       }
       if (!folder) {
-        const { Directory = [] } = await library(token, "/library/sections");
+        const [{ Directory = [] }, deck] = await Promise.all([
+          library(token, "/library/sections"),
+          library(token, `/library/onDeck?${new URLSearchParams({ "X-Plex-Container-Start": "0", "X-Plex-Container-Size": "16" })}`).catch(() => ({})),
+        ]);
         return [
-          { id: "deck", title: "Continue watching", subtitle: "", kind: "folder", art: false },
-          ...Directory.filter((d) => ["movie", "show", "artist"].includes(d.type))
-            .map((d) => ({ id: `s${d.key}`, title: d.title, subtitle: { movie: "Movies", show: "TV shows", artist: "Music" }[d.type], kind: "folder", art: false })),
+          ...(deck.Metadata || []).map((m) => ({ ...toItem(m, { wide: true }), group: "Continue watching" })),
+          ...Directory.filter((d) => ["movie", "show", "artist"].includes(d.type)).map((d) => ({
+            id: `s${d.key}`, title: d.title, subtitle: { movie: "Movies", show: "TV shows", artist: "Music" }[d.type],
+            kind: "folder", art: false, shape: "library", library: d.type, group: "Libraries",
+          })),
         ];
       }
-      if (folder === "deck") return ((await library(token, "/library/onDeck")).Metadata || []).map(toItem);
       const section = /^s(\d+)$/.exec(folder);
       const path = section
-        ? `/library/sections/${section[1]}/all?${new URLSearchParams({ sort: "addedAt:desc", "X-Plex-Container-Start": "0", "X-Plex-Container-Size": "60" })}`
+        ? `/library/sections/${section[1]}/all?${new URLSearchParams({ sort: "addedAt:desc", "X-Plex-Container-Start": "0", "X-Plex-Container-Size": "90" })}`
         : `/library/metadata/${encodeURIComponent(folder)}/children`;
-      return ((await library(token, path)).Metadata || []).map(toItem);
+      return ((await library(token, path)).Metadata || []).map((m) => toItem(m, { inShow: !section }));
     },
     async start(token, itemId) {
       const [m] = (await library(token, `/library/metadata/${encodeURIComponent(itemId)}`)).Metadata || [];
       if (!m || FOLDERS.includes(m.type)) throw new Error("That can't be played.");
-      const item = toItem(m);
+      const item = baseItem(m);
       const session = crypto.randomUUID();
       const audio = item.kind === "audio";
       // HLS for every player; video is copied when the car can already play it
@@ -265,7 +299,57 @@ function createPlex(baseUrl, plexTv = "https://plex.tv", extraHosts = []) {
         }),
       };
     },
-    art: (token, itemId) => /^\d+$/.test(itemId) && fetch(`${base}/photo/:/transcode?${new URLSearchParams({ width: "400", height: "400", minSize: "1", upscale: "1", url: `/library/metadata/${itemId}/thumb` })}`, { headers: plexHeaders(token), signal: AbortSignal.timeout(15_000) }),
+    // shape: the size the picker draws it at; img: "thumb" (poster, still, cover)
+    // or "art" (a movie's backdrop).
+    art(token, itemId, { shape = "square", img = "thumb" } = {}) {
+      if (!/^\d+$/.test(itemId)) return false;
+      const [width, height] = ART_SIZES[shape] || ART_SIZES.square;
+      return fetch(`${base}/photo/:/transcode?${new URLSearchParams({ width, height, minSize: "1", upscale: "1", url: `/library/metadata/${itemId}/${img === "art" ? "art" : "thumb"}` })}`, { headers: plexHeaders(token), signal: AbortSignal.timeout(15_000) });
+    },
+  };
+}
+const ART_SIZES = { poster: [300, 450], wide: [480, 270], square: [400, 400] };
+
+// FSP (Front Seat Plex, the car player for Plex): the same Plex server, browsed the
+// way FSP shows it, so without a library that only holds bigger copies (a 4K
+// library whose titles are all in a smaller one too), and video only. It plays
+// exactly as Plex does, with the host's Plex connection; nothing extra to connect.
+function createFsp(plex, { url, secret, publicUrl }) {
+  const base = url.replace(/\/$/, "");
+  const shownCache = new Map(); // token -> { ids: Set of section ids, at }
+  // The libraries FSP shows; null when FSP can't be asked (then everything shows).
+  async function shown(token) {
+    const hit = shownCache.get(token);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.ids;
+    try {
+      const r = await fetch(`${base}/partner/sections`, { headers: { authorization: `Bearer ${secret}`, "x-plex-token": token || "" }, signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) return null;
+      const ids = new Set(((await r.json()).ids || []).map(String));
+      shownCache.set(token, { ids, at: Date.now() });
+      return ids;
+    } catch {
+      return null;
+    }
+  }
+  return {
+    id: "fsp",
+    name: "FSP",
+    via: "plex", // uses the Plex connection
+    hosts: hostnames(publicUrl),
+    icon: `${base}/icon.svg`, // its logo, for the picker's tab
+    async browse(token, q, folder) {
+      const items = await plex.browse(token, q, folder);
+      if (folder && !q) return items;
+      const ids = await shown(token);
+      return items.filter((i) => {
+        if (i.shape === "square" || i.library === "artist") return false; // music isn't FSP's
+        if (i.group === "Libraries") return !ids || ids.has(i.id.slice(1));
+        if (i.group) return true; // Continue watching: FSP plays a smaller copy when there is one
+        return !ids || !i.section || ids.has(i.section);
+      });
+    },
+    start: (token, itemId) => plex.start(token, itemId),
+    art: (token, itemId, opts) => plex.art(token, itemId, opts),
   };
 }
 
@@ -279,8 +363,10 @@ function hostnames(url) {
 }
 
 function createApps(env) {
+  const plex = env.PLEX_URL && createPlex(env.PLEX_URL, env.PLEX_TV_URL);
   const list = [
-    env.PLEX_URL && createPlex(env.PLEX_URL, env.PLEX_TV_URL, hostnames(env.FSP_PUBLIC_URL)),
+    plex,
+    plex && env.FSP_URL && env.FSP_SECRET && createFsp(plex, { url: env.FSP_URL, secret: env.FSP_SECRET, publicUrl: env.FSP_PUBLIC_URL }),
     env.ABS_URL && createAbs(env.ABS_URL),
   ].filter(Boolean);
   return { list, byId: (id) => list.find((a) => a.id === id) || null };

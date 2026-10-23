@@ -501,14 +501,14 @@ test("watch party from Audiobookshelf: connect, browse, stream through Frunk", a
   const listed = await srv.request("GET", "/api/apps", { cookie: member });
   assert.equal(listed.body[0].account, "jordan");
   assert.doesNotMatch(JSON.stringify(listed.body), new RegExp(ABS_KEY));
-  assert.deepEqual((await srv.request("GET", "/api/party/sources", { cookie: member })).body, [{ id: "abs", name: "Audiobookshelf", hosts: ["127.0.0.1"] }]);
+  assert.deepEqual((await srv.request("GET", "/api/party/sources", { cookie: member })).body, [{ id: "abs", name: "Audiobookshelf", hosts: ["127.0.0.1"], icon: "/api/dash/audiobookshelf" }]);
 
   // The member hosts; the admin joins as a guest.
   const { code } = (await post("/api/party", member)).body;
   const host = (await post(`/api/party/${code}/join`, member)).body;
   const guest = (await post(`/api/party/${code}/join`, admin)).body;
   const browse = (cookie, m, query) => srv.request("GET", `/api/party/${code}/browse/${m}?${new URLSearchParams(query)}`, { cookie });
-  assert.deepEqual((await browse(member, host.member, { source: "abs" })).body, [{ id: "li_1", title: "Project Hail Mary", subtitle: "Andy Weir", kind: "audio", art: true }]);
+  assert.deepEqual((await browse(member, host.member, { source: "abs" })).body, [{ id: "li_1", title: "Project Hail Mary", subtitle: "Andy Weir", kind: "audio", art: true, shape: "square" }]);
   assert.equal((await browse(member, host.member, { source: "abs", q: "hail" })).body[0].subtitle, "Andy Weir");
   assert.deepEqual((await browse(member, host.member, { source: "abs", q: "dune" })).body, []);
   assert.equal((await browse(admin, guest.member, { source: "abs" })).status, 403);
@@ -579,16 +579,23 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
   plex.linked = true; // the code was entered at plex.tv/link
   assert.deepEqual((await srv.request("GET", "/api/apps/plex/link", { cookie: member })).body, { status: "connected", account: "jordan" });
   const [source] = (await srv.request("GET", "/api/party/sources", { cookie: member })).body;
-  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv"]);
+  assert.deepEqual([source.hosts, source.icon], [["127.0.0.1", "app.plex.tv"], "/api/dash/plex"]);
 
   const { code } = (await post("/api/party", member)).body;
   const host = (await post(`/api/party/${code}/join`, member)).body;
   const guest = (await post(`/api/party/${code}/join`, admin)).body;
   const browse = async (query) => (await srv.request("GET", `/api/party/${code}/browse/${host.member}?${new URLSearchParams({ source: "plex", ...query })}`, { cookie: member })).body;
-  assert.deepEqual((await browse({})).map((i) => [i.id, i.title, i.kind]), [["deck", "Continue watching", "folder"], ["s1", "Movies", "folder"], ["s2", "TV Shows", "folder"]]);
-  assert.deepEqual((await browse({ in: "s2" })).map((i) => [i.title, i.subtitle, i.kind]), [["Bluey", "3 seasons", "folder"]]);
-  assert.deepEqual((await browse({ in: "200" })).map((i) => [i.title, i.kind]), [["Season 1", "folder"]]);
-  assert.deepEqual(await browse({ in: "201" }), [{ id: "202", title: "Magic Xylophone", subtitle: "Bluey · S1E1", kind: "video", art: true }]);
+  // Top level: Continue watching (wide cards), then the libraries.
+  assert.deepEqual((await browse({})).map((i) => [i.id, i.title, i.subtitle, i.kind, i.shape, i.group]), [
+    ["202", "Bluey", "S1E1 · Magic Xylophone", "video", "wide", "Continue watching"],
+    ["s1", "Movies", "Movies", "folder", "library", "Libraries"],
+    ["s2", "TV Shows", "TV shows", "folder", "library", "Libraries"],
+  ]);
+  assert.equal((await browse({})).find((i) => i.id === "202").progress, 0.25);
+  assert.deepEqual((await browse({ in: "s1" })).map((i) => [i.title, i.subtitle, i.shape, i.year]), [["Arrival", "2016", "poster", 2016]]);
+  assert.deepEqual((await browse({ in: "s2" })).map((i) => [i.title, i.subtitle, i.kind, i.shape]), [["Bluey", "3 seasons", "folder", "poster"]]);
+  assert.deepEqual((await browse({ in: "200" })).map((i) => [i.title, i.kind, i.shape]), [["Season 1", "folder", "poster"]]);
+  assert.deepEqual(await browse({ in: "201" }), [{ id: "202", title: "Magic Xylophone", subtitle: "Episode 1 · 24 min", kind: "video", art: true, shape: "wide", img: "thumb", minutes: 24, progress: 0.25, section: "2" }]);
   assert.deepEqual((await browse({ q: "blu" })).map((i) => i.title), ["Bluey"], "photos aren't offered");
 
   const load = (id) => post(`/api/party/${code}/control`, member, { member: host.member, action: "load", media: { source: "plex", id } });
@@ -611,6 +618,10 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
   assert.deepEqual(plex.segmentTokens, ["server-token"]);
   assert.equal(plex.started.length, 1, "Plex was asked to start once, for everyone");
   assert.equal((await get(media.art)).headers.get("content-type"), "image/png");
+  // Picker art is sized for how it's drawn.
+  await get(`/api/party/${code}/art/plex/100?shape=poster&img=art`);
+  await get(`/api/party/${code}/art/plex/100?shape=huge&img=../x`);
+  assert.deepEqual(plex.photos.slice(-2), [["300", "450", "/library/metadata/100/art"], ["400", "400", "/library/metadata/100/thumb"]]);
 
   // Something Plex can't play at all says so, up front.
   plex.decisionCode = 2000;
@@ -632,6 +643,8 @@ test("watch party in the car: a Plex party streams through FSP, shared per stret
     asked.push({ path: u.pathname, q: Object.fromEntries(u.searchParams), auth: req.headers.authorization, token: req.headers["x-plex-token"] });
     if (u.pathname === "/partner/info") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ duration: 1440000, fps: 24, title: "x", codecs: ["h264", "mpeg1"] }));
     if (u.pathname === "/partner/party") return res.writeHead(200, { "content-type": "video/mp2t", "x-stream-pos": "12.500" }).end("ts-bytes");
+    if (u.pathname === "/partner/sections") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ids: ["2"] }));
+    if (u.pathname === "/icon.svg") return res.writeHead(200, { "content-type": "image/svg+xml" }).end("<svg xmlns='http://www.w3.org/2000/svg'/>");
     res.writeHead(404).end();
   });
   await new Promise((r) => pd.listen(0, "127.0.0.1", r));
@@ -645,14 +658,26 @@ test("watch party in the car: a Plex party streams through FSP, shared per stret
   plex.linked = true;
   await post("/api/apps/plex/link", member);
   await srv.request("GET", "/api/apps/plex/link", { cookie: member });
-  // A FSP tile counts as Plex during a party.
-  const [source] = (await srv.request("GET", "/api/party/sources", { cookie: member })).body;
-  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv", "fsp.example"]);
+  // FSP is its own tab (its tile opens it), using the Plex connection; nothing to connect.
+  assert.deepEqual((await srv.request("GET", "/api/apps", { cookie: member })).body.map((a) => a.id), ["plex"]);
+  const sources = (await srv.request("GET", "/api/party/sources", { cookie: member })).body;
+  assert.deepEqual(sources.map((s) => [s.id, s.hosts, s.icon]), [
+    ["plex", ["127.0.0.1", "app.plex.tv"], "/api/dash/plex"],
+    ["fsp", ["fsp.example"], "/api/party/source-icon/fsp"],
+  ]);
+  const icon = await srv.request("GET", "/api/party/source-icon/fsp");
+  assert.equal(icon.headers.get("content-type"), "image/svg+xml");
+  assert.equal((await srv.request("GET", "/api/party/source-icon/plex")).status, 404);
   const { code } = (await post("/api/party", member)).body;
   const host = (await post(`/api/party/${code}/join`, member)).body;
+  // Only the libraries FSP shows (here TV, not Movies), and no music.
+  const browse = async (query) => (await srv.request("GET", `/api/party/${code}/browse/${host.member}?${new URLSearchParams({ source: "fsp", ...query })}`, { cookie: member })).body;
+  assert.deepEqual((await browse({})).map((i) => i.id), ["202", "s2"]);
+  assert.deepEqual((await browse({ in: "201" })).map((i) => i.id), ["202"]);
+  assert.equal(asked.find((a) => a.path === "/partner/sections").token, "server-token");
   const guest = (await post(`/api/party/${code}/join`, admin)).body;
   const guestEvents = await events(srv, `/api/party/${code}/events/${guest.member}`, admin);
-  assert.equal((await post(`/api/party/${code}/control`, member, { member: host.member, action: "load", media: { source: "plex", id: "202" } })).status, 200);
+  assert.equal((await post(`/api/party/${code}/control`, member, { member: host.member, action: "load", media: { source: "fsp", id: "202" } })).status, 200);
   let msg;
   do msg = await guestEvents.nextOf("party"); while (!msg.party.state.media);
   const media = msg.party.state.media;

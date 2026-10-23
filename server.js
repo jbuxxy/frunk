@@ -1076,12 +1076,15 @@ const TEST_SOURCE = { id: "test", name: "Test video", hosts: [] };
 const TEST_ITEMS = [{ id: "bbb", title: "Big Buck Bunny", subtitle: "Test stream", kind: "video", src: `${TEST_STREAM_ORIGIN}/x36xhzz/x36xhzz.m3u8` }];
 const apps = createApps(process.env);
 const userById = (id) => accounts.allUsers().find((u) => u.id === id) || null;
-const tokenFor = (userId, appId) => userById(userId)?.apps?.[appId]?.token || null;
+// An app's key for this person; FSP uses their Plex one (apps.js createFsp).
+const tokenFor = (userId, appId) => userById(userId)?.apps?.[apps.byId(appId)?.via || appId]?.token || null;
+// The picker's tab icon for an app.
+const sourceIcon = (a) => (a.icon ? `/api/party/source-icon/${a.id}` : a.dash ? `/api/dash/${a.dash}` : null);
 const parties = createParties({
   sourcesFor(userId) {
     const user = userById(userId);
     if (!user) return [];
-    const connected = apps.list.filter((a) => user.apps?.[a.id]).map((a) => ({ id: a.id, name: a.name, hosts: a.hosts }));
+    const connected = apps.list.filter((a) => user.apps?.[a.via || a.id]).map((a) => ({ id: a.id, name: a.name, hosts: a.hosts, icon: sourceIcon(a) }));
     return [...connected, ...(user.admin ? [TEST_SOURCE] : [])];
   },
   async browse(userId, sourceId, q, folder) {
@@ -1096,12 +1099,12 @@ const parties = createParties({
     }
     return apps.byId(sourceId).start(tokenFor(userId, sourceId), itemId);
   },
-  art: (userId, sourceId, itemId) => apps.byId(sourceId)?.art(tokenFor(userId, sourceId), itemId) ?? null,
+  art: (userId, sourceId, itemId, opts) => apps.byId(sourceId)?.art(tokenFor(userId, sourceId), itemId, opts) ?? null,
   person: (userId) => {
     const u = userById(userId);
     return u && { name: u.name || u.email, color: u.avatarColor || null };
   },
-  carFor: (sourceId, kind) => !!FSP && sourceId === "plex" && kind === "video",
+  carFor: (sourceId, kind) => !!FSP && ["plex", "fsp"].includes(sourceId) && kind === "video",
 });
 
 // ---------- Watch Party in the car ----------
@@ -1119,7 +1122,7 @@ const fsp = (path, token, signal) => fetch(`${FSP.base}${path}`, {
 
 // Connected apps: each person's own account on the configured servers, by
 // pasting a key ("key") or entering a code at the app's own site ("link").
-on("GET", "/api/apps", "user", ({ res, user }) => json(res, 200, apps.list.map((a) => ({
+on("GET", "/api/apps", "user", ({ res, user }) => json(res, 200, apps.list.filter((a) => !a.via).map((a) => ({
   id: a.id, name: a.name, connect: a.connect, help: a.help || null, linkAt: a.linkAt || null, host: a.hosts[0],
   connected: !!user.apps?.[a.id], account: user.apps?.[a.id]?.account || null,
 }))));
@@ -1304,10 +1307,28 @@ on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, 
   req.on("close", () => body.destroy());
   body.pipe(res);
 });
-on("GET", "/api/party/:code/art/:source/:item", "party", async ({ res, params, who }) => {
+// An app's own logo for the picker's tab (FSP's windshield), fetched once.
+const sourceIcons = new Map(); // app id -> { type, buf }
+on("GET", "/api/party/source-icon/:id", "anyone", async ({ res, params }) => {
+  const app = apps.byId(params.id);
+  if (!app || !app.icon) return json(res, 404, { error: "no icon" });
+  let icon = sourceIcons.get(app.id);
+  if (!icon) {
+    try {
+      const r = await fetch(app.icon, { signal: AbortSignal.timeout(10_000) });
+      const type = r.ok && (r.headers.get("content-type") || "").split(";")[0];
+      if (/^image\/(svg\+xml|png|webp)$/.test(type)) sourceIcons.set(app.id, (icon = { type, buf: Buffer.from(await r.arrayBuffer()) }));
+    } catch {}
+  }
+  if (!icon) return json(res, 404, { error: "no icon" });
+  return sendImage(res, icon.type, icon.buf, "public, max-age=86400");
+});
+on("GET", "/api/party/:code/art/:source/:item", "party", async ({ res, url, params, who }) => {
   let r;
   try {
-    r = await parties.artFor(params.code, who, params.source, decodeURIComponent(params.item));
+    const shape = ["poster", "wide", "square"].includes(url.searchParams.get("shape")) ? url.searchParams.get("shape") : "square";
+    const img = url.searchParams.get("img") === "art" ? "art" : "thumb";
+    r = await parties.artFor(params.code, who, params.source, decodeURIComponent(params.item), { shape, img });
   } catch {}
   const type = r && r.ok && r.headers.get("content-type");
   if (!type || !/^image\/(png|jpeg|webp|gif|avif)/.test(type)) return json(res, 404, { error: "no art" });

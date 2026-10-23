@@ -34,7 +34,8 @@ const TALK_CHUNK_MAX = 16_000; // base64 chars per chunk: 200 ms of 16 kHz μ-la
 //   start(userId, sourceId, itemId): { title, subtitle, kind, src } for a public
 //     stream, or { ..., stream } for one members fetch through Frunk with the
 //     host's key, which never leaves the server (apps.js createStream)
-//   art(userId, sourceId, itemId): a fetch Response with the item's cover
+//   art(userId, sourceId, itemId, { shape, img }): a fetch Response with the item's
+//     cover, sized for how the picker draws it
 // person(userId): { name, color } or null once the account is gone.
 // carFor(sourceId, kind): whether the car player (FSP, see server.js) can play
 //   this, so the Tesla gets a canvas instead of a <video> it would pause in Drive.
@@ -549,11 +550,11 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
         segment: `${p.code}:${p.loads}:${p.at}`, position: positionOf(p),
       };
     },
-    artFor(code, userId, sourceId, itemId) {
+    artFor(code, userId, sourceId, itemId, opts) {
       const p = find(code);
       const here = p && [...p.members.values()].some((m) => m.userId === userId);
       if (!here || !sourcesFor(p.hostId).some((s) => s.id === sourceId)) return null;
-      return art(p.hostId, sourceId, itemId);
+      return art(p.hostId, sourceId, itemId, opts);
     },
   };
 }

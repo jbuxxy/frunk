@@ -102,11 +102,11 @@ async function fakeAbs() {
 async function fakePlex() {
   // decided: sessions Plex was asked about first (it refuses to start others);
   // decisionCode: 2000+ for something that can't be played.
-  const plex = { linked: false, shared: true, started: [], stopped: [], segmentTokens: [], decided: new Set(), decisionCode: 1001 };
+  const plex = { linked: false, shared: true, started: [], stopped: [], segmentTokens: [], decided: new Set(), decisionCode: 1001, photos: [] };
   const movie = { ratingKey: "100", type: "movie", title: "Arrival", year: 2016, thumb: "/t/100" };
   const show = { ratingKey: "200", type: "show", title: "Bluey", childCount: 3, thumb: "/t/200" };
   const season = { ratingKey: "201", type: "season", title: "Season 1", parentTitle: "Bluey" };
-  const episode = { ratingKey: "202", type: "episode", title: "Magic Xylophone", grandparentTitle: "Bluey", parentIndex: 1, index: 1, thumb: "/t/202" };
+  const episode = { ratingKey: "202", type: "episode", title: "Magic Xylophone", grandparentTitle: "Bluey", parentIndex: 1, index: 1, thumb: "/t/202", duration: 1440000, viewOffset: 360000, librarySectionID: 2 };
   const server = http.createServer((req, res) => {
     const { pathname, searchParams } = new URL(req.url, "http://x");
     const json = (body) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
@@ -148,7 +148,10 @@ async function fakePlex() {
       plex.stopped.push(searchParams.get("session"));
       return res.writeHead(200).end();
     }
-    if (pathname === "/photo/:/transcode") return res.writeHead(200, { "content-type": "image/png" }).end(png());
+    if (pathname === "/photo/:/transcode") {
+      plex.photos.push([searchParams.get("width"), searchParams.get("height"), searchParams.get("url")]);
+      return res.writeHead(200, { "content-type": "image/png" }).end(png());
+    }
     res.writeHead(404).end();
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

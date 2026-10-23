@@ -203,6 +203,7 @@
     openEvents();
     show(true);
     update(r.party);
+    chatForLayout();
     f.render(); // lock the tiles that can't be part of a party
     renderBar();
   }
@@ -360,7 +361,7 @@
     $("partyFloats").replaceChildren();
     view.hidden = true;
     document.body.classList.remove("in-party");
-    for (const id of ["partyPicker", "partySettings", "partyInvite", "partyKnock"]) if ($(id).open) $(id).close();
+    for (const id of ["partyPicker", "partySettings", "partyInvite", "partyKnock", "partyMoreDialog"]) if ($(id).open) $(id).close();
     knocks = [];
     f.render();
     renderBar();
@@ -966,6 +967,25 @@
     view.classList.remove("chatting");
   }
   $("partyChatBtn").onclick = () => ($("partyChat").hidden ? openChat() : closeChat());
+  // A phone held upright: video on top, then the controls, then chat, always open.
+  const portraitPhone = matchMedia("(max-width: 640px) and (orientation: portrait)");
+  const chatForLayout = () => { if (session) (portraitPhone.matches ? openChat() : closeChat()); };
+  portraitPhone.addEventListener?.("change", chatForLayout);
+
+  // ---------- The ⋯ menu (phones): the top bar's less-used buttons ----------
+  $("partyMore").onclick = () => {
+    $("partyMoreCode").textContent = party.code;
+    $("partyMoreSettings").hidden = $("partySettingsBtn").hidden;
+    $("partyMoreFullscreen").hidden = $("partyFullscreen").hidden;
+    $("partyMoreLeave").textContent = $("partyLeave").textContent;
+    $("partyMoreDialog").showModal();
+  };
+  for (const [item, target] of [["partyMoreInvite", "partyInviteBtn"], ["partyMoreSettings", "partySettingsBtn"], ["partyMoreFullscreen", "partyFullscreen"], ["partyMoreMinimize", "partyMinimize"], ["partyMoreLeave", "partyLeave"]]) {
+    $(item).onclick = () => {
+      $("partyMoreDialog").close();
+      $(target).click();
+    };
+  }
   $("partyChatClose").onclick = closeChat;
   $("partyChatForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -1031,13 +1051,27 @@
     $("partyPicker").showModal();
     loadPicks();
   }
+  // One tab per app, shown as its logo (Plex, FSP, Audiobookshelf).
   function renderTabs() {
     $("partyTabs").hidden = pickSources.length < 2;
     $("partyTabs").replaceChildren(...pickSources.map((x) => {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = `pill small${x === pickSource ? " on" : ""}`;
-      b.textContent = x.name;
+      b.className = "pick-tab";
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(x === pickSource));
+      b.setAttribute("aria-label", x.name);
+      b.title = x.name;
+      if (x.icon) {
+        const img = new Image();
+        img.alt = "";
+        img.src = x.icon;
+        img.onerror = () => img.replaceWith(x.name);
+        b.append(img);
+      } else {
+        b.classList.add("text");
+        b.textContent = x.name;
+      }
       b.onclick = () => {
         pickSource = x;
         $("partyPickForm").q.value = "";
@@ -1048,14 +1082,105 @@
       return b;
     }));
   }
+  const el = (tag, className, text) => Object.assign(document.createElement(tag), className ? { className } : {}, text != null ? { textContent: text } : {});
+  // Placeholders the shape of what's coming, while it loads.
+  function skeleton(folder) {
+    const grid = el("div", `pick-grid ${folder ? "poster" : "wide"}`);
+    for (let i = 0; i < (folder ? 12 : 4); i++) {
+      const card = el("div", `pick-card ${folder ? "poster" : "wide"}`);
+      card.append(el("div", "pick-art skel"), el("div", "pick-line skel"));
+      grid.append(card);
+    }
+    return grid;
+  }
+  const LIBRARY_ICONS = {
+    movie: '<path d="M4 5h16v14H4zM4 9h16M4 15h16M8 5v4M12 5v4M16 5v4M8 15v4M12 15v4M16 15v4"/>',
+    show: '<path d="M3 6h18v12H3zM8 21h8M12 3l3 3M12 3L9 6"/>',
+    artist: '<path d="M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/>',
+  };
+  // A card for something to play or open: its picture in the item's shape
+  // (poster, wide still, square cover), how far you got, title and a line under.
+  function pickCard(item, onPick) {
+    const shape = ["poster", "wide", "square"].includes(item.shape) ? item.shape : "square";
+    const b = el("button", `pick-card ${shape}${item.kind === "folder" ? " folder" : ""}`);
+    b.type = "button";
+    const art = el("div", "pick-art");
+    art.append(el("span", "pick-letter", (item.title.trim()[0] || "?").toUpperCase()));
+    if (item.art) {
+      const img = new Image();
+      img.alt = "";
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.onload = () => img.classList.add("in");
+      img.onerror = () => img.remove();
+      img.src = `/api/party/${session.code}/art/${pickSource.id}/${encodeURIComponent(item.id)}?${new URLSearchParams({ shape, img: item.img || "thumb" })}`;
+      art.append(img);
+    }
+    if (item.progress > 0.01) {
+      const bar = el("div", "pick-progress");
+      bar.append(Object.assign(el("i"), { style: `width:${Math.round(item.progress * 100)}%` }));
+      art.append(bar);
+    }
+    if (item.kind === "audio" && shape !== "square") art.append(el("span", "pick-kind", "Audio"));
+    const text = el("div", "pick-text");
+    text.append(el("b", "", item.title), el("small", "", item.subtitle || (item.year ? String(item.year) : "")));
+    b.append(art, text);
+    b.onclick = () => onPick(item);
+    return b;
+  }
+  function libraryChip(item, onPick) {
+    const b = el("button", "pick-lib");
+    b.type = "button";
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = LIBRARY_ICONS[item.library] || LIBRARY_ICONS.movie;
+    const text = el("span", "pick-lib-text");
+    text.append(el("b", "", item.title), el("small", "", item.subtitle || ""));
+    b.append(icon, text);
+    b.onclick = () => onPick(item);
+    return b;
+  }
+  // Items in groups (Continue watching, Libraries), the rest in a grid per shape.
+  function renderPicks(items, onPick) {
+    const out = [];
+    const groups = new Map();
+    const loose = new Map(); // shape -> items
+    for (const item of items) {
+      if (item.group) (groups.get(item.group) || groups.set(item.group, []).get(item.group)).push(item);
+      else {
+        const shape = ["poster", "wide", "square"].includes(item.shape) ? item.shape : "square";
+        (loose.get(shape) || loose.set(shape, []).get(shape)).push(item);
+      }
+    }
+    for (const [name, list] of groups) {
+      out.push(el("h3", "pick-group", name));
+      if (list.every((i) => i.shape === "library")) {
+        const libs = el("div", "pick-libs");
+        libs.append(...list.map((i) => libraryChip(i, onPick)));
+        out.push(libs);
+      } else {
+        const row = el("div", "pick-row");
+        row.append(...list.map((i) => pickCard(i, onPick)));
+        out.push(row);
+      }
+    }
+    for (const [shape, list] of loose) {
+      const grid = el("div", `pick-grid ${shape}`);
+      grid.append(...list.map((i) => pickCard(i, onPick)));
+      out.push(grid);
+    }
+    return out;
+  }
   async function loadPicks() {
     const seq = ++pickSeq;
     const box = $("partyPickList");
     const q = $("partyPickForm").q.value.trim();
     const folder = !q && pickPath.length ? pickPath[pickPath.length - 1] : null;
     $("partyPickBack").hidden = !folder;
-    $("partyPickWhere").textContent = folder ? folder.title : "";
-    box.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "Loading…" }));
+    $("partyPickWhere").textContent = folder ? pickPath.map((p) => p.title).join(" › ") : "";
+    box.replaceChildren(skeleton(!!folder || !!q));
+    box.scrollTop = 0;
     let items;
     try {
       items = await f.api(`/api/party/${session.code}/browse/${session.member}?${new URLSearchParams({ source: pickSource.id, q, in: folder ? folder.id : "" })}`);
@@ -1065,46 +1190,27 @@
     }
     if (seq !== pickSeq) return;
     if (!items.length) {
-      box.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: q ? `Nothing matches “${q}”.` : "Nothing here yet." }));
+      box.replaceChildren(el("p", "hint", q ? `Nothing matches “${q}”.` : "Nothing here yet."));
       return;
     }
-    box.replaceChildren(...items.map((item) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = `party-item${item.kind === "folder" ? " folder" : ""}`;
-      const art = document.createElement("span");
-      art.className = "party-item-art";
-      art.textContent = (item.title.trim()[0] || "?").toUpperCase();
-      if (item.art) {
-        const img = new Image();
-        img.alt = "";
-        img.loading = "lazy";
-        img.onload = () => art.replaceChildren(img);
-        img.src = `/api/party/${session.code}/art/${pickSource.id}/${encodeURIComponent(item.id)}`;
+    // A show with just one season: straight to its episodes (Back skips it too).
+    if (folder && !folder.auto && items.length === 1 && items[0].kind === "folder" && items[0].shape === "poster") {
+      pickPath.push({ id: items[0].id, title: items[0].title, auto: true });
+      return loadPicks();
+    }
+    box.replaceChildren(...renderPicks(items, (item) => {
+      if (item.kind === "folder") {
+        if (q) $("partyPickForm").q.value = "";
+        pickPath.push({ id: item.id, title: item.title });
+        return loadPicks();
       }
-      const text = document.createElement("span");
-      text.className = "party-item-text";
-      const title = document.createElement("b");
-      title.textContent = item.title;
-      const sub = document.createElement("small");
-      sub.textContent = item.subtitle || "";
-      text.append(title, sub);
-      b.append(art, text);
-      b.onclick = () => {
-        if (item.kind === "folder") {
-          if (q) $("partyPickForm").q.value = "";
-          pickPath.push({ id: item.id, title: item.title });
-          return loadPicks();
-        }
-        $("partyPicker").close();
-        f.toast(`Starting ${item.title}…`);
-        control("load", { media: { source: pickSource.id, id: item.id } });
-      };
-      return b;
+      $("partyPicker").close();
+      f.toast(`Starting ${item.title}…`);
+      control("load", { media: { source: pickSource.id, id: item.id } });
     }));
   }
   $("partyPickBack").onclick = () => {
-    pickPath.pop();
+    if (pickPath.pop()?.auto) pickPath.pop();
     loadPicks();
   };
   let searchTimer = null;
