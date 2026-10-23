@@ -1,5 +1,5 @@
 // Frunk — the car player for Watch Party. The Tesla pauses any <video> while
-// driving, so in the car a Plex party plays here instead: PlexDrive turns the title
+// driving, so in the car a Plex party plays here instead: FSP turns the title
 // into H.264 (on its iGPU) or MPEG-1 video with MP2 audio in one stream, which JSMpeg
 // decodes onto a <canvas> and Web Audio, keeping the two in step itself. H.264 is
 // decoded by h264.js (the car's hardware decoder if its browser has one, else
@@ -183,7 +183,7 @@ window.frunkCar = (() => {
       } catch (err) {
         f.toast(err.message, 5000);
       }
-      // H.264 when PlexDrive can encode it and this browser can decode it.
+      // H.264 when FSP can encode it and this browser can decode it.
       codec = "mpeg1";
       try {
         await loadJsmpeg();

@@ -6,7 +6,7 @@
        a 2D canvas; or
      - with tinyh264 (WebAssembly, in a worker: /h264-worker.js), drawn with JSMpeg's
        own WebGL renderer.
-   Shared by PlexDrive and Frunk (keep the two copies identical).
+   Shared by FSP and Frunk (keep the two copies identical).
 
    window.H264 = {
      support(): Promise<{ webcodecs, wasm }>   which backends work here (cached)

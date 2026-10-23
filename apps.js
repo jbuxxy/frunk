@@ -187,7 +187,7 @@ function createPlex(baseUrl, plexTv = "https://plex.tv", extraHosts = []) {
     name: "Plex",
     connect: "link",
     linkAt: "plex.tv/link", // where the code is entered
-    // Your Plex tile, the Plex web app, and PlexDrive (the car player for Plex), if set up.
+    // Your Plex tile, the Plex web app, and FSP (the car player for Plex), if set up.
     hosts: [new URL(base).hostname, "app.plex.tv", ...extraHosts],
     link: {
       async start() {
@@ -280,7 +280,7 @@ function hostnames(url) {
 
 function createApps(env) {
   const list = [
-    env.PLEX_URL && createPlex(env.PLEX_URL, env.PLEX_TV_URL, hostnames(env.PLEXDRIVE_PUBLIC_URL)),
+    env.PLEX_URL && createPlex(env.PLEX_URL, env.PLEX_TV_URL, hostnames(env.FSP_PUBLIC_URL)),
     env.ABS_URL && createAbs(env.ABS_URL),
   ].filter(Boolean);
   return { list, byId: (id) => list.find((a) => a.id === id) || null };

@@ -282,7 +282,7 @@ test("invites and people", async (t) => {
 test("admins send one of their tiles to other people's pages", async (t) => {
   const { srv, admin, member } = await serverWithPeople();
   t.after(() => srv.stop());
-  const add = { name: "PlexDrive", url: "https://plexdrive.example/" };
+  const add = { name: "FSP", url: "https://fsp.example/" };
   const mine = (await srv.request("PUT", "/api/sites", { cookie: admin, body: [add] })).body;
   const people = (await srv.request("GET", "/api/admin/people", { cookie: admin })).body;
   const memberId = people.users.find((u) => u.email === "member@example.com").id;
@@ -601,8 +601,8 @@ test("watch party from Plex: link with a code, browse folders, one shared transc
   await guestEvents.close();
 });
 
-test("watch party in the car: a Plex party streams through PlexDrive, shared per stretch", async (t) => {
-  // A stand-in PlexDrive: answers info and the party stream, and notes what it was asked.
+test("watch party in the car: a Plex party streams through FSP, shared per stretch", async (t) => {
+  // A stand-in FSP: answers info and the party stream, and notes what it was asked.
   const asked = [];
   const pd = http.createServer((req, res) => {
     const u = new URL(req.url, "http://x");
@@ -614,7 +614,7 @@ test("watch party in the car: a Plex party streams through PlexDrive, shared per
   await new Promise((r) => pd.listen(0, "127.0.0.1", r));
   pd.unref();
   const plex = await fakePlex();
-  const env = { ...plex.env, PLEXDRIVE_URL: `http://127.0.0.1:${pd.address().port}`, PLEXDRIVE_SECRET: "s3cret", PLEXDRIVE_PUBLIC_URL: "https://plexdrive.example" };
+  const env = { ...plex.env, FSP_URL: `http://127.0.0.1:${pd.address().port}`, FSP_SECRET: "s3cret", FSP_PUBLIC_URL: "https://fsp.example" };
   const { srv, admin, member } = await serverWithPeople({ env });
   t.after(() => Promise.all([srv.stop(), plex.close(), new Promise((r) => pd.close(r))]));
   const post = (path, cookie, body = {}) => srv.request("POST", path, { cookie, body });
@@ -622,9 +622,9 @@ test("watch party in the car: a Plex party streams through PlexDrive, shared per
   plex.linked = true;
   await post("/api/apps/plex/link", member);
   await srv.request("GET", "/api/apps/plex/link", { cookie: member });
-  // A PlexDrive tile counts as Plex during a party.
+  // A FSP tile counts as Plex during a party.
   const [source] = (await srv.request("GET", "/api/party/sources", { cookie: member })).body;
-  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv", "plexdrive.example"]);
+  assert.deepEqual(source.hosts, ["127.0.0.1", "app.plex.tv", "fsp.example"]);
   const { code } = (await post("/api/party", member)).body;
   const host = (await post(`/api/party/${code}/join`, member)).body;
   const guest = (await post(`/api/party/${code}/join`, admin)).body;

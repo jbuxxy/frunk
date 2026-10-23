@@ -31,7 +31,7 @@ const GUEST_NAME_MAX = 30;
 //     host's key, which never leaves the server (apps.js createStream)
 //   art(userId, sourceId, itemId): a fetch Response with the item's cover
 // person(userId): { name, color } or null once the account is gone.
-// carFor(sourceId, kind): whether the car player (PlexDrive, see server.js) can play
+// carFor(sourceId, kind): whether the car player (FSP, see server.js) can play
 //   this, so the Tesla gets a canvas instead of a <video> it would pause in Drive.
 //
 // Everyone in a party is an "identity": a Frunk account's id, or a guest's

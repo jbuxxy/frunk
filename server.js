@@ -1087,19 +1087,19 @@ const parties = createParties({
     const u = userById(userId);
     return u && { name: u.name || u.email, color: u.avatarColor || null };
   },
-  carFor: (sourceId, kind) => !!PLEXDRIVE && sourceId === "plex" && kind === "video",
+  carFor: (sourceId, kind) => !!FSP && sourceId === "plex" && kind === "video",
 });
 
 // ---------- Watch Party in the car ----------
-// The Tesla pauses any <video> while driving, so with PLEXDRIVE_URL set, a Plex party
-// plays in the car through PlexDrive instead: it turns the title into MPEG-1 that
+// The Tesla pauses any <video> while driving, so with FSP_URL set, a Plex party
+// plays in the car through FSP instead: it turns the title into MPEG-1 that
 // public/car.js draws on a canvas, one stream per party shared by every car in it.
 // Frunk asks with the host's own Plex key, as for the regular stream.
-const PLEXDRIVE = process.env.PLEXDRIVE_URL && process.env.PLEXDRIVE_SECRET
-  ? { base: process.env.PLEXDRIVE_URL.replace(/\/$/, ""), secret: process.env.PLEXDRIVE_SECRET }
+const FSP = process.env.FSP_URL && process.env.FSP_SECRET
+  ? { base: process.env.FSP_URL.replace(/\/$/, ""), secret: process.env.FSP_SECRET }
   : null;
-const plexDrive = (path, token, signal) => fetch(`${PLEXDRIVE.base}${path}`, {
-  headers: { authorization: `Bearer ${PLEXDRIVE.secret}`, "x-plex-token": token || "" },
+const fsp = (path, token, signal) => fetch(`${FSP.base}${path}`, {
+  headers: { authorization: `Bearer ${FSP.secret}`, "x-plex-token": token || "" },
   signal,
 });
 
@@ -1245,41 +1245,41 @@ on("GET", "/api/party/:code/stream/:load/:file", "party", async ({ req, res, par
   body.pipe(res);
 });
 on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who }) => {
-  const c = PLEXDRIVE && parties.carFor(params.code, who, params.load);
+  const c = FSP && parties.carFor(params.code, who, params.load);
   if (!c) return json(res, 404, { error: "not found" });
   let r;
   try {
-    r = await plexDrive(`/partner/info?id=${encodeURIComponent(c.id)}`, tokenFor(c.hostId, c.source), AbortSignal.timeout(15_000));
+    r = await fsp(`/partner/info?id=${encodeURIComponent(c.id)}`, tokenFor(c.hostId, c.source), AbortSignal.timeout(15_000));
   } catch {
-    return json(res, 502, { error: "PlexDrive didn't answer." });
+    return json(res, 502, { error: "FSP didn't answer." });
   }
-  if (!r.ok) return json(res, 502, { error: "PlexDrive can't play this." });
+  if (!r.ok) return json(res, 502, { error: "FSP can't play this." });
   const { duration, fps, codecs } = await r.json();
   return json(res, 200, { duration, fps, codecs: Array.isArray(codecs) ? codecs : ["mpeg1"] });
 });
 on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, params, who }) => {
-  const c = PLEXDRIVE && parties.carFor(params.code, who, params.load);
+  const c = FSP && parties.carFor(params.code, who, params.load);
   if (!c || !c.playing) return json(res, 404, { error: "not found" });
   // solo: a car that fell out of step gets its own catch-up stream instead of the shared one.
   const solo = /^[a-z0-9]{1,16}$/.test(url.searchParams.get("solo") || "") ? `:${url.searchParams.get("solo")}` : "";
   const ctl = new AbortController();
   req.on("close", () => ctl.abort());
-  const slow = setTimeout(() => ctl.abort(), 20_000); // only until PlexDrive starts answering
+  const slow = setTimeout(() => ctl.abort(), 20_000); // only until FSP starts answering
   let r;
   try {
-    // What this car plays: H.264 (encoded on PlexDrive's iGPU) or MPEG-1, at 360/480/720.
+    // What this car plays: H.264 (encoded on FSP's iGPU) or MPEG-1, at 360/480/720.
     const codec = url.searchParams.get("codec") === "h264" ? "h264" : "mpeg1";
     const quality = ["360", "480", "720"].includes(url.searchParams.get("q")) ? url.searchParams.get("q") : "720";
     const q = new URLSearchParams({ id: c.id, key: c.segment + solo, pos: c.position.toFixed(2), codec, q: quality });
-    r = await plexDrive(`/partner/party?${q}`, tokenFor(c.hostId, c.source), ctl.signal);
+    r = await fsp(`/partner/party?${q}`, tokenFor(c.hostId, c.source), ctl.signal);
   } catch {
-    return res.headersSent || json(res, 502, { error: "PlexDrive didn't answer." });
+    return res.headersSent || json(res, 502, { error: "FSP didn't answer." });
   } finally {
     clearTimeout(slow);
   }
   if (!r.ok) {
-    if (r.status === 429) return json(res, 429, { error: "Too many people are watching through PlexDrive right now." });
-    return json(res, 502, { error: "PlexDrive can't play this." });
+    if (r.status === 429) return json(res, 429, { error: "Too many people are watching through FSP right now." });
+    return json(res, 502, { error: "FSP can't play this." });
   }
   res.writeHead(200, {
     "content-type": "video/mp2t", "cache-control": "no-store", "x-content-type-options": "nosniff",
