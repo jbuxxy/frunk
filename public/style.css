@@ -230,6 +230,9 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 .swatch.on { box-shadow: var(--ring); }
 
 .optional { color: #5d626a; font-weight: 400; }
+.check-row { display: flex; align-items: center; gap: 14px; margin: 4px 0 18px; font-weight: 600; cursor: pointer; }
+.check-row input { width: 26px; height: 26px; margin: 0; flex: none; accent-color: var(--accent); }
+.check-hint { display: block; font-size: 15px; font-weight: 400; color: var(--muted); }
 .hint { margin-top: 6px; font-size: 16px; color: var(--muted); line-height: 1.4; }
 .hint.error { color: var(--red); min-height: 22px; }
 

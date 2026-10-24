@@ -106,6 +106,8 @@ function validSites(body) {
       color: /^#[0-9a-f]{6}$/i.test(s.color || "") ? s.color : undefined,
       icon: typeof s.icon === "string" && /^https?:\/\//i.test(s.icon.trim()) ? s.icon.trim() : undefined,
       logo: typeof s.logo === "string" && /^(di:[a-z0-9-]{1,80}|[a-z0-9]{1,60}|none)$/.test(s.logo) ? s.logo : undefined,
+      // Ask to go fullscreen before opening it in the car; unset = the default (app.js).
+      fullscreen: typeof s.fullscreen === "boolean" ? s.fullscreen : undefined,
     });
   }
   return out;

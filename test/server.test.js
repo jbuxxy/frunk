@@ -5,6 +5,19 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 const { fakeCdn, fakeAbs, fakePlex, ABS_KEY, startServer, signUp, serverWithPeople } = require("./helpers");
 
+test("a tile keeps its fullscreen choice (true or false), and only that", async (t) => {
+  const { srv, member } = await serverWithPeople();
+  t.after(() => srv.stop());
+  const tiles = [
+    { name: "FSP", url: "https://fsp.example/", fullscreen: true },
+    { name: "Netflix", url: "https://www.netflix.com/", fullscreen: false },
+    { name: "Other", url: "https://other.example/", fullscreen: "yes" },
+    { name: "Unset", url: "https://unset.example/" },
+  ];
+  const saved = (await srv.request("PUT", "/api/sites", { cookie: member, body: tiles })).body;
+  assert.deepEqual(saved.map((s) => s.fullscreen), [true, false, undefined, undefined]);
+});
+
 test("who can call what", async (t) => {
   const cdn = await fakeCdn();
   const { srv, admin, member } = await serverWithPeople({ cdn });

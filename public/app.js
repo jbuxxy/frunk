@@ -355,8 +355,18 @@
   // ---------- Launching ----------
   // Sites open as normal pages; the browser's back button (which works in
   // fullscreen) returns to Frunk.
+  // Whether a tile asks to go fullscreen first (in the car): its own setting, else yes
+  // for video services that play fullscreen, and no for the rest (FSP and the like play
+  // in the page, and fullscreen turns the car's microphone off).
+  const VIDEO_HOSTS = ["youtube.com", "netflix.com", "disneyplus.com", "primevideo.com", "amazon.com", "max.com", "hbomax.com",
+    "hulu.com", "twitch.tv", "peacocktv.com", "paramountplus.com", "tv.apple.com", "tubitv.com", "pluto.tv", "crunchyroll.com", "sling.com"];
+  function fullscreenByDefault(url) {
+    const host = hostOf(url);
+    return VIDEO_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  }
+  const asksFullscreen = (site) => (typeof site.fullscreen === "boolean" ? site.fullscreen : fullscreenByDefault(site.url));
   function launch(site) {
-    if (wantsFullscreen && !fsPromptShown) return openFullscreenPrompt(site);
+    if (wantsFullscreen && !fsPromptShown && asksFullscreen(site)) return openFullscreenPrompt(site);
     location.assign(site.url);
   }
 
@@ -1550,6 +1560,8 @@
     nameInput.value = site ? site.name : "";
     urlInput.value = site ? site.url : "";
     iconInput.value = site && site.icon ? site.icon : "";
+    fsInput.checked = site ? asksFullscreen(site) : false;
+    fsTouched = !!site && typeof site.fullscreen === "boolean";
     chosenColor = site && site.color ? site.color : null;
     chosenLogo = site && site.logo ? site.logo : null;
     draftId = site ? site.id : null;
@@ -1567,6 +1579,14 @@
     }
   }
 
+  // The fullscreen box follows the address's default until it's ticked or unticked.
+  const fsInput = $("siteFullscreen");
+  let fsTouched = false;
+  fsInput.addEventListener("change", () => { fsTouched = true; });
+  urlInput.addEventListener("input", () => {
+    const url = normalizeUrl(urlInput.value);
+    if (!fsTouched && url) fsInput.checked = fullscreenByDefault(url);
+  });
   urlInput.addEventListener("change", () => {
     if (!nameInput.value.trim()) {
       const url = normalizeUrl(urlInput.value);
@@ -1592,7 +1612,9 @@
     const url = normalizeUrl(urlInput.value);
     if (!url) return toast("That address doesn't look right");
     const name = nameInput.value.trim() || new URL(url).hostname;
-    const entry = { name, url, icon: normalizeUrl(iconInput.value) || undefined, color: chosenColor || undefined, logo: chosenLogo || undefined };
+    // Saved only when it differs from the address's default, so a tile keeps following it.
+    const fullscreen = fsInput.checked === fullscreenByDefault(url) ? undefined : fsInput.checked;
+    const entry = { name, url, icon: normalizeUrl(iconInput.value) || undefined, color: chosenColor || undefined, logo: chosenLogo || undefined, fullscreen };
     const next = editingId
       ? sites.map((s) => (s.id === editingId ? { ...s, ...entry } : s))
       : [...sites, entry];
