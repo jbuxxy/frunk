@@ -422,6 +422,18 @@
       }
       return r;
     };
+    // When the audio device stops for a while (the page hidden, iOS interrupting sound),
+    // the system clock JSMpeg reckons by runs on without it, and the queue looked seconds
+    // off: past maxAudioLag, JSMpeg threw it away (a gap) and the clock leapt ahead (the
+    // picture raced). Whenever the two are more than half a second apart, the device's.
+    W.prototype.getEnqueuedTime = function () {
+      var now = performance.now() / 1000;
+      if (this.context && this.unlocked) {
+        var device = this.startTime - this.context.currentTime;
+        if (Math.abs(device - (this.wallclockStartTime - now)) > 0.5) this.wallclockStartTime = now + device;
+      }
+      return Math.max(this.wallclockStartTime - now, 0);
+    };
     W.prototype.cushioned = true;
   }
 
@@ -463,6 +475,10 @@
     var a = player.audio, out = player.audioOut;
     if (!a || a.firstPts == null || !out) return null;
     var clock = a.firstPts + a.decodedTime - out.enqueuedTime;
+    // Sound the browser has stopped (a phone asleep, iOS interrupting it): the pictures
+    // stop with it and both carry on together. Run on alone, they were 20 s ahead after
+    // 20 s, and then waited that long for the sound.
+    if (out.context && out.context.state !== 'running') { player.clockWatch = null; player.clockStalled = false; player.stallFrom = null; return clock; }
     var now = performance.now() / 1000, w = player.clockWatch;
     if (!w || now - w.at >= 1) {
       if (w) player.clockStalled = clock - w.clock < 0.5 * (now - w.at);
@@ -496,8 +512,10 @@
       };
       // With a buffer, sound stays compressed until it's nearly due (16 KB a second, not
       // the 350 KB decoded): a minute in hand costs the car 1 MB, not 23.
+      // Never while JSMpeg has the output off (it's throwing its queue away): sound decoded
+      // then is lost, and with a buffer it would go on to lose all of it.
       C.prototype.decode = function () {
-        if (this.jit && this.out && this.out.enqueuedTime > this.jit) return false;
+        if (this.jit && this.out && (!this.out.enabled || this.out.enqueuedTime > this.jit)) return false;
         return decode.apply(this, arguments);
       };
     });
