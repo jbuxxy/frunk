@@ -13,7 +13,6 @@
      carTier(): 'new' | 'old' | 'unknown'      Tesla MCU3 (AMD) vs MCU2 (Intel), by GPU
      gpuName()                                 the GPU's name (WebGL), or null
      choose(serverCodecs, saved) -> Promise<{ codec, q, backend }>   what this car plays
-     nextStep({ codec, q }) -> { codec, q, message } | null          a car falling behind
      carNote(why, state) -> the note for FSP's Car check page
      snapshot(player, canvas) -> JPEG data URL of the current picture
      fetchSource(onHeaders, onFail) -> a JSMpeg source (options.source) streaming over HTTP
@@ -22,7 +21,9 @@
      createPlayer(url, options): JSMpeg.Player options as usual, plus:
        fps            the stream's constant frame rate
        backend        'webcodecs' | 'wasm' (from support())
-       onBehind()     the device can't keep up (frames pile up); the player should step down
+       onBehind()     the device can't decode in time (for 5 s); it has skipped to the
+                      next keyframe. For a note: quality comes from the car's model.
+       buffer         seconds the server sends ahead (FSP's solo stream), 0 for live
    } */
 (function () {
   'use strict';
@@ -55,7 +56,9 @@
     }
     return gpu;
   }
+  var TEST_TIER = (/[?&]tier=(new|old)\b/.exec(location.search) || [])[1]; // TEMPORARY: a phone playing as a car
   function carTier() {
+    if (TEST_TIER) return TEST_TIER;
     var name = gpuName() || '';
     if (/AMD|Radeon/i.test(name)) return 'new';
     if (/Intel/i.test(name)) return 'old';
@@ -98,6 +101,7 @@
     this.frames = 0;
     this.clock = null; // where the sound is now, as a stream time (set by the player)
     this.lead = 0;
+    this.decodeTime = 0;
     this.sentAt = 0;
     this.backend = options.backend === 'webcodecs' ? new WebCodecsBackend(this) : new WasmBackend(this);
     var self = this;
@@ -105,9 +109,12 @@
   }
   H264Video.prototype.connect = function (destination) { this.destination = destination; };
   H264Video.prototype.write = function (pts, buffers) {
+    // A stream carried on after a break overlaps the last a little: no picture twice.
+    if (pts != null && this.lastPts != null && pts <= this.lastPts) return;
     var au = concat(buffers);
     var key = isKeyframe(au);
     if (this.waitingForKey && !key) return;
+    if (pts != null) { if (this.firstPts == null) this.firstPts = pts; this.lastPts = pts; }
     this.waitingForKey = false;
     this.queue.push({ data: au, key: key, pts: pts });
     this.canPlay = true;
@@ -117,25 +124,36 @@
     // more on a car whose sound runs well ahead, and counting it stepped a car that was
     // keeping up down to MPEG-1.
     // Not in a stream's first 5 s either, while the decoder warms up on the opening burst.
+    // And only if decoding is what's slow: on a patchy connection (a Tesla on LTE) the
+    // pictures stop coming, then arrive in a burst, which a decoder that takes a few ms a
+    // picture catches up on by itself; stepping down there only made it look worse.
+    // And it has to last 5 s: a busy moment (a burst arriving) delays a few pictures.
     if (this.queue.length > this.fps * 2 && this.frames > this.fps * 5 && this.due() > this.fps * 2) {
-      var last = -1;
-      for (var i = this.queue.length - 1; i > 0; i--) if (this.queue[i].key) { last = i; break; }
-      if (last > 0) this.queue = this.queue.slice(last);
-      this.onBehind();
-    }
+      var now = performance.now() / 1000;
+      this.behindSince = this.behindSince || now;
+      var slow = this.decodeTime > 0.9 / this.fps && now - this.behindSince > 5; // can't decode a picture in the time it shows
+      if (slow || this.due() > this.fps * 10) this.skipToKey(); // or 10 s due and not decoded
+      if (slow) { this.behindSince = 0; this.onBehind(); }
+    } else this.behindSince = 0;
     this.pump();
+  };
+  // Drop to the newest keyframe (dropping P-frames alone would smear the picture).
+  // To the newest keyframe that's already due, not the newest received: with a buffer,
+  // that one is up to a minute ahead, and the picture would wait there for the sound.
+  H264Video.prototype.skipToKey = function () {
+    for (var i = this.due() - 1; i > 0; i--) if (this.queue[i].key) { this.queue = this.queue.slice(i); return; }
   };
   // How many queued pictures could be decoded now (at the front; the rest wait their turn).
   H264Video.prototype.due = function () {
     var n = 0;
-    while (n < this.queue.length && !early(this.queue[n].pts, this.clock, this.lead)) n++;
+    while (n < this.queue.length && !early(this.queue[n].pts, this.clock, this.lead, this.maxWait)) n++;
     return n;
   };
   H264Video.prototype.decode = function () { this.pump(); return false; };
   H264Video.prototype.pump = function () {
     if (this.busy || !this.queue.length || !this.backend.ready) return;
     // Not yet: the sound hasn't reached this picture (less the time decoding takes).
-    if (early(this.queue[0].pts, this.clock, this.lead)) return;
+    if (early(this.queue[0].pts, this.clock, this.lead, this.maxWait)) return;
     var au = this.queue.shift();
     this.busy = true;
     this.sentAt = performance.now();
@@ -145,7 +163,9 @@
   H264Video.prototype.done = function (gotPicture) {
     this.busy = false;
     // How long a picture takes to decode, smoothed: pictures go in that much early.
-    this.lead += (Math.min((performance.now() - this.sentAt) / 1000, MAX_LEAD) - this.lead) / 8;
+    var took = (performance.now() - this.sentAt) / 1000;
+    this.lead += (Math.min(took, MAX_LEAD) - this.lead) / 8;
+    this.decodeTime += (took - this.decodeTime) / 8; // uncapped: is this decoder fast enough?
     if (gotPicture) {
       this.frames++;
       this.decodedTime += 1 / this.fps;
@@ -321,15 +341,6 @@
     });
   }
 
-  // For a car falling behind: 720p, then 480p, then MPEG-1 (lighter to decode, heavier
-  // for the server), with what to tell the driver; null when there's nothing lighter.
-  // (Callers space these out, so one bad moment isn't three steps.)
-  function nextStep(cur) {
-    if (cur.codec === 'h264' && cur.q > 480) return { codec: 'h264', q: 480, message: 'The car is falling behind at ' + cur.q + 'p, so switching to 480p' };
-    if (cur.codec === 'h264') return { codec: 'mpeg1', q: cur.q, message: 'Switching to the lighter video format for this car' };
-    return null;
-  }
-
   // A car's quiet note for FSP's Car check page. s: { codec, backend, q, fps (the
   // source's), frames, since (the stream's first picture), player, title }.
   function carNote(why, s) {
@@ -342,9 +353,10 @@
       seconds: Math.round(secs), sound: ctx ? ctx.state : 'none', title: s.title, decodes: matrixText(matrix),
       // What the sound sync was doing: sound queued ahead (ms), and pictures waiting.
       soundLead: s.player && s.player.audioOut ? Math.round(s.player.audioOut.enqueuedTime * 1000) : null,
+      buffered: s.player ? +buffered(s.player).toFixed(1) : null, // seconds in hand
       waiting: s.player && s.player.video && s.player.video.queue ? s.player.video.queue.length : null,
       due: s.player && s.player.video && s.player.video.due ? s.player.video.due() : null,
-      decodeMs: s.player && s.player.video && s.player.video.lead != null ? Math.round(s.player.video.lead * 1000) : null,
+      decodeMs: s.player && s.player.video && s.player.video.decodeTime != null ? Math.round(s.player.video.decodeTime * 1000) : null,
       clockStalled: s.player && s.player.clockStalled ? 1 : 0,
     };
   }
@@ -367,20 +379,34 @@
   // playing; a chunk that comes a little late leaves a gap (a pop), and JSMpeg starts
   // the next right away, still with nothing in hand. After a gap, start it a little
   // ahead instead, and let a bit more be queued, so jitter doesn't run it dry again.
-  var CUSHION = 0.15;
+  // How far ahead follows the gaps this connection has (a car on patchy mobile data runs
+  // dry again and again at 0.15 s): after running dry for 2 s, 2.5 s in hand next time,
+  // up to 3 s; it eases back after a minute without a gap, so only a bad patch costs delay.
+  var CUSHION = 0.15, CUSHION_MAX = 3;
   // What JSMpeg may have queued before it throws sound away. A Watch Party car starts up
   // to a second ahead (from the last keyframe) and ffmpeg sends in ~1/3 s bursts, so at
   // 0.55 s a party car threw sound away (a gap) every few seconds. Pictures wait for the
   // sound, so a longer queue costs nothing in sync.
-  var MAX_AUDIO_LAG = 1;
+  var MAX_AUDIO_LAG = 4; // room for the cushion at its largest, plus a burst
+  var SOUND_AHEAD = 5; // with a buffer: seconds of sound decoded ahead, the rest kept compressed
   function cushionSound() {
     var W = window.JSMpeg && window.JSMpeg.AudioOutput && window.JSMpeg.AudioOutput.WebAudio;
     if (!W || W.prototype.cushioned) return;
     var play = W.prototype.play;
     W.prototype.play = function () {
+      var now = performance.now() / 1000;
       if (this.context && this.startTime < this.context.currentTime) {
-        this.startTime = this.context.currentTime + CUSHION;
-        this.wallclockStartTime = performance.now() / 1000 + CUSHION;
+        // A gap. Not the very first start, which isn't one.
+        // How long it's been dry: sound should have been playing since startTime.
+        var dry = this.context.currentTime - this.startTime;
+        this.gaps = (this.gaps || 0) + 1;
+        this.cushion = this.gaps > 1 ? Math.min(CUSHION_MAX, Math.max((this.cushion || CUSHION) * 1.3, dry * 1.25)) : CUSHION;
+        this.lastGap = now;
+        this.startTime = this.context.currentTime + this.cushion;
+        this.wallclockStartTime = now + this.cushion;
+      } else if (this.cushion > CUSHION && now - this.lastGap > 60) {
+        this.cushion = Math.max(CUSHION, this.cushion * 0.8);
+        this.lastGap = now;
       }
       var r = play.apply(this, arguments);
       // JSMpeg reckons what's queued by the system clock, but sound plays by the audio
@@ -406,17 +432,33 @@
   // its timestamp. Holding the compressed picture back, rather than a decoded one, costs
   // nothing: no frames held in memory, and the decoder does the same work.
   var MAX_LEAD = 0.1; // the most a picture is decoded ahead of its time
-  var MAX_WAIT = 1; // further ahead than this, the clocks don't agree: don't wait
-  function early(pts, clock, lead) {
+  // Further ahead than this, the clocks don't agree: don't wait. A player with a buffer
+  // (options.buffer, seconds in hand) has pictures that far ahead on purpose.
+  var MAX_WAIT = 1;
+  function early(pts, clock, lead, maxWait) {
     if (clock == null || pts == null) return false;
     var ahead = pts - lead - clock;
-    return ahead > 0 && ahead < MAX_WAIT;
+    return ahead > 0 && ahead < (maxWait || MAX_WAIT);
   }
   // Where the sound playing now is in the stream: the first sound packet's timestamp,
   // plus what's been decoded since, less what's still queued to play.
   // A sound clock that stops (a car's audio paused or stuck, the browser still calling it
   // running) mustn't hold the pictures: checked each second, and while it moves at less
-  // than half speed, pictures go at their own pace.
+  // than half speed, pictures go on in real time from where it stopped (not all at once:
+  // with a buffer, that would be up to a minute of them).
+  // Where in the title the data received so far ends (with a buffer, timestamps run on
+  // the title's timeline; offset: where the first stream started): the next picture's.
+  function dataEnd(player, offset, fps) {
+    var v = player && player.video;
+    if (!v || v.firstPts == null || v.lastPts == null) return null;
+    return offset + (v.lastPts - v.firstPts) + 1 / (fps || 24);
+  }
+  // Seconds of the stream in hand (received, not yet heard), compressed or not.
+  function buffered(player) {
+    var a = player.audio, out = player.audioOut;
+    if (!a || a.firstPts == null || a.lastPts == null || !out) return 0;
+    return a.lastPts - (a.firstPts + a.decodedTime - out.enqueuedTime);
+  }
   function soundClock(player) {
     var a = player.audio, out = player.audioOut;
     if (!a || a.firstPts == null || !out) return null;
@@ -425,24 +467,38 @@
     if (!w || now - w.at >= 1) {
       if (w) player.clockStalled = clock - w.clock < 0.5 * (now - w.at);
       player.clockWatch = { at: now, clock: clock };
+      if (!player.clockStalled) player.stallFrom = null;
+      else if (!player.stallFrom) player.stallFrom = { at: now, clock: clock };
     }
-    return player.clockStalled ? null : clock;
+    return player.clockStalled ? player.stallFrom.clock + (now - player.stallFrom.at) : clock;
   }
   function syncPictures() {
     var J = window.JSMpeg;
     if (!J || !J.Player || J.Player.prototype.synced) return;
     var P = J.Player.prototype, update = P.updateForStreaming;
     P.updateForStreaming = function () {
-      if (this.video) this.video.clock = soundClock(this);
+      if (this.video) {
+        this.video.clock = soundClock(this);
+        this.video.maxWait = (this.options && this.options.maxWait) || MAX_WAIT;
+      }
+      if (this.audio) { this.audio.out = this.audioOut; this.audio.jit = this.options && this.options.buffer ? SOUND_AHEAD : 0; }
       return update.apply(this, arguments);
     };
     P.synced = true;
     [J.Decoder.MP2Audio, J.Decoder.MP2AudioWASM].forEach(function (C) {
       if (!C) return;
-      var write = C.prototype.write;
+      var write = C.prototype.write, decode = C.prototype.decode;
       C.prototype.write = function (pts) {
+        if (pts != null && this.lastPts != null && pts <= this.lastPts) return; // no sound twice (see H264Video.write)
         if (this.firstPts == null) this.firstPts = pts;
+        if (pts != null) this.lastPts = pts;
         return write.apply(this, arguments);
+      };
+      // With a buffer, sound stays compressed until it's nearly due (16 KB a second, not
+      // the 350 KB decoded): a minute in hand costs the car 1 MB, not 23.
+      C.prototype.decode = function () {
+        if (this.jit && this.out && this.out.enqueuedTime > this.jit) return false;
+        return decode.apply(this, arguments);
       };
     });
     // JSMpeg's own MPEG-1 decoders: one picture per packet, so a list of timestamps.
@@ -450,14 +506,16 @@
       if (!C) return;
       var write = C.prototype.write, decode = C.prototype.decode;
       C.prototype.write = function (pts) {
+        if (pts != null && this.lastPts != null && pts <= this.lastPts) return; // see H264Video.write
+        if (pts != null) { if (this.firstPts == null) this.firstPts = pts; this.lastPts = pts; }
         if (this.times === undefined) this.times = [];
-        // 4 s of pictures waiting: this car is far behind anyway, so stop timing them
-        // rather than lose track of which timestamp is whose.
-        if (this.times && this.times.push(pts) > 120) this.times = null;
+        // More pictures waiting than the buffer holds: this car is far behind anyway, so
+        // stop timing them rather than lose track of which timestamp is whose.
+        if (this.times && this.times.push(pts) > 2400) this.times = null; // 100 s at 24 fps
         return write.apply(this, arguments);
       };
       C.prototype.decode = function () {
-        if (this.times && early(this.times[0], this.clock, 0)) return false;
+        if (this.times && early(this.times[0], this.clock, 0, this.maxWait)) return false;
         var got = decode.apply(this, arguments);
         if (got && this.times) this.times.shift();
         return got;
@@ -470,20 +528,25 @@
   // server hands that connection straight to ffmpeg. onHeaders(headers) once it starts,
   // onFail(error) when it's refused (error.status set) or breaks off (not when it's
   // stopped or ends).
-  function fetchSource(onHeaders, onFail) {
+  // carryOn(): with a buffer, the URL to carry on from when the stream ends or breaks off
+  // before the title does (see dataEnd), or null; the player plays what it has meanwhile,
+  // and it's tried every 2 s until it's back (or the player is stopped).
+  function fetchSource(onHeaders, onFail, carryOn) {
     function FetchSource(url) {
       this.url = url;
       this.destination = null;
       this.streaming = true;
       this.established = false;
+      this.tries = 0;
       this.completed = false;
       this.progress = 0;
       this.ctl = new AbortController();
     }
     FetchSource.prototype.connect = function (destination) { this.destination = destination; };
-    FetchSource.prototype.start = function () {
+    FetchSource.prototype.start = function () { this.open(this.url); };
+    FetchSource.prototype.open = function (url) {
       var self = this;
-      fetch(this.url, { signal: this.ctl.signal, credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
+      fetch(url, { signal: this.ctl.signal, credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
         if (!r.ok) {
           return r.json().catch(function () { return {}; }).then(function (b) {
             var e = new Error(b.error || "The video couldn't start");
@@ -491,35 +554,87 @@
             throw e;
           });
         }
-        if (onHeaders) onHeaders(r.headers);
+        if (onHeaders && !self.established) onHeaders(r.headers);
         self.progress = 1;
         var reader = r.body.getReader();
         // Each read starts the next without returning it: a returned one would chain
         // every chunk's promise to the last, kept until the stream ends.
         (function next() {
+          // Enough in hand (limitBuffer): stop reading for now, and TCP holds FSP's ffmpeg
+          // back, so the car never queues more than it asked for.
+          if (self.ctl.signal.aborted) return;
+          if (self.full && self.full()) return setTimeout(next, 250);
           reader.read().then(function (x) {
-            if (x.done) { self.completed = true; return; }
+            if (x.done) { if (!self.carryOn()) self.completed = true; return; }
             self.established = true;
+            self.tries = 0;
             if (self.destination) self.destination.write(x.value);
             next();
           }, failed);
         })();
       }).catch(failed);
       function failed(err) {
-        if (err.name !== 'AbortError' && onFail) onFail(err);
+        if (err.name === 'AbortError' || (self.established && self.carryOn())) return;
+        if (onFail) onFail(err);
       }
+    };
+    FetchSource.prototype.carryOn = function () {
+      var url = carryOn && !this.ctl.signal.aborted && carryOn();
+      if (!url) return false;
+      var self = this;
+      setTimeout(function () {
+        if (self.ctl.signal.aborted) return;
+        // The last stream's half-received packets would be glued to the next one's start.
+        var d = self.destination;
+        if (d && d.pesPacketInfo) {
+          d.leftoverBytes = null;
+          for (var k in d.pesPacketInfo) { var pi = d.pesPacketInfo[k]; pi.buffers = []; pi.currentLength = 0; pi.totalLength = 0; }
+        }
+        self.open(url);
+      }, this.tries++ ? 2000 : 0);
+      return true;
     };
     FetchSource.prototype.resume = function () {};
     FetchSource.prototype.destroy = function () { this.ctl.abort(); };
     return FetchSource;
   }
 
+  // options.buffer: seconds the server sends ahead (FSP's solo stream); JSMpeg may then
+  // queue that much sound (plus the cushion), keep it unread, and pictures wait that long.
+  function bufferOptions(opts) {
+    var buffer = Math.max(0, Number(opts.buffer) || 0);
+    // Sound is decoded only SOUND_AHEAD ahead (the rest waits compressed), so JSMpeg's
+    // queue stays short; going over maxAudioLag makes JSMpeg throw its queue away.
+    opts.maxAudioLag = MAX_AUDIO_LAG + (buffer ? SOUND_AHEAD : 0);
+    // Pictures that far ahead are waited for. Room to spare: after a break, the stream
+    // carried on with bursts on top of what's in hand (and a picture taken for being
+    // overdue is skipped).
+    opts.maxWait = buffer ? buffer + 30 : MAX_WAIT;
+    // The compressed sound in hand: reading stops at buffer + 5 s (limitBuffer), and a
+    // buffer that overflows is emptied whole. 128 kbit/s is 16 KB a second; room for 30 s more.
+    if (buffer) opts.audioBufferSize = Math.max(opts.audioBufferSize || 0, (buffer + 30) * 16384);
+    // JSMpeg's MPEG-1 decoder too (pictures up to 1800 kbit/s, ~225 KB a second).
+    if (buffer) opts.videoBufferSize = Math.max(opts.videoBufferSize || 0, (buffer + 30) * 256 * 1024);
+    return opts;
+  }
+
+  // A player whose stream runs ahead (options.buffer): reads no further than buffer + 5 s
+  // ahead of what's playing. (FSP catches up after a dead zone, which piled up a minute
+  // of sound and slowed the page.) For an MPEG-1 JSMpeg.Player, call it after creating it.
+  function limitBuffer(player, buffer) {
+    if (buffer > 0 && player && player.source) {
+      player.source.full = function () { return buffered(player) > buffer + 5; };
+    }
+    return player;
+  }
+
   // ---------- a JSMpeg player with this decoder ----------
   function createPlayer(url, options) {
     cushionSound();
     syncPictures();
-    var opts = { maxAudioLag: MAX_AUDIO_LAG };
+    var opts = {};
     for (var k in options) opts[k] = options[k];
+    bufferOptions(opts);
     opts.video = false; // JSMpeg's own MPEG-1 decoder isn't wanted
     opts.streaming = true;
     var player = new window.JSMpeg.Player(url, opts);
@@ -530,13 +645,13 @@
       dec.connect(player.renderer);
     }
     player.demuxer.connect(window.JSMpeg.Demuxer.TS.STREAM.VIDEO_1, dec);
-    return player;
+    return limitBuffer(player, Number(opts.buffer) || 0);
   }
 
   window.H264 = {
     support: support, carTier: carTier, gpuName: gpuName, createPlayer: createPlayer,
-    fetchSource: fetchSource, choose: choose, nextStep: nextStep, carNote: carNote, snapshot: snapshot, decodeMatrix: decodeMatrix, CODECS: CODECS,
+    fetchSource: fetchSource, limitBuffer: limitBuffer, buffered: buffered, dataEnd: dataEnd, choose: choose, carNote: carNote, snapshot: snapshot, decodeMatrix: decodeMatrix, CODECS: CODECS,
     // For an MPEG-1 JSMpeg.Player: the same sound handling as createPlayer's.
-    soundOptions: function (options) { cushionSound(); syncPictures(); options.maxAudioLag = MAX_AUDIO_LAG; return options; },
+    soundOptions: function (options) { cushionSound(); syncPictures(); return bufferOptions(options); },
   };
 })();

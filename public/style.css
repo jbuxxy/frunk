@@ -526,6 +526,17 @@ dialog h2 { font-size: 32px; letter-spacing: .06em; }
 .party-car { position: absolute; inset: 0; background: #000 center / contain no-repeat; }
 .party-car[hidden] { display: none; }
 .party-car canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; transition: opacity .2s; }
+.car-hint {
+  position: absolute; top: 14px; left: 50%; z-index: 2; display: flex; align-items: center; max-width: calc(100% - 32px);
+  padding: 4px; border-radius: 999px; background: rgba(11, 11, 16, .72); border: 1px solid rgba(255, 255, 255, .14);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); color: #fff; white-space: nowrap;
+  opacity: 0; transform: translate(-50%, -10px); transition: opacity .45s, transform .45s;
+}
+.car-hint.on { opacity: 1; transform: translate(-50%, 0); }
+.car-hint button { background: none; border: 0; color: inherit; font: inherit; font-size: 16px; border-radius: 999px; cursor: pointer; }
+.car-hint .go { padding: 9px 6px 9px 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.car-hint .go b { color: var(--gold); }
+.car-hint .x { padding: 7px 13px; font-size: 21px; line-height: 1; opacity: .55; }
 .party-top, .party-controls, .party-who, .party-away { position: absolute; left: 0; right: 0; transition: opacity .3s; }
 .party-top {
   top: 0; display: flex; align-items: center; gap: 14px;
