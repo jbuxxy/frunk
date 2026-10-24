@@ -436,7 +436,8 @@
   // ---------- the stream over plain HTTP ----------
   // A JSMpeg source reading one long HTTP response, in place of its WebSocket source: the
   // server hands that connection straight to ffmpeg. onHeaders(headers) once it starts,
-  // onFail(error) when it's refused or breaks off (not when it's stopped or ends).
+  // onFail(error) when it's refused (error.status set) or breaks off (not when it's
+  // stopped or ends).
   function fetchSource(onHeaders, onFail) {
     function FetchSource(url) {
       this.url = url;
@@ -452,7 +453,11 @@
       var self = this;
       fetch(this.url, { signal: this.ctl.signal, credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
         if (!r.ok) {
-          return r.json().catch(function () { return {}; }).then(function (b) { throw new Error(b.error || "The video couldn't start"); });
+          return r.json().catch(function () { return {}; }).then(function (b) {
+            var e = new Error(b.error || "The video couldn't start");
+            e.status = r.status; // 429: FSP has no room for another stream
+            throw e;
+          });
         }
         if (onHeaders) onHeaders(r.headers);
         self.progress = 1;

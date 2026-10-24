@@ -54,7 +54,10 @@ window.frunkCar = (() => {
     steppedAt = Date.now();
     carNote("stepped down");
     if (next.q !== quality) keep.set("frunk-car-q", String(next.q));
-    if (next.codec !== codec) keep.set("frunk-car-codec", next.codec);
+    if (next.codec !== codec) {
+      keep.set("frunk-car-codec", next.codec);
+      stepBack = { codec, q: quality };
+    }
     ({ codec, q: quality } = next);
     f.toast(next.message, 4000);
     stop(true);
@@ -70,6 +73,7 @@ window.frunkCar = (() => {
   let openedAt = 0;
   let lastFrame = 0;
   let retryAt = 0; // after a failed start, wait before trying again
+  let stepBack = null; // { codec, q } before a step down to MPEG-1, in case FSP has no room for it
   let rejoinedAt = 0; // when this car last rejoined the shared stream to catch up
   let streamAt; // the party's state.at this stream belongs to (see sync)
   let ready = false; // load() has picked the codec and quality; no stream before that
@@ -113,6 +117,15 @@ window.frunkCar = (() => {
       (err) => {
         if (canvas !== me) return;
         stop(true);
+        // A step down to MPEG-1 that FSP has no room for (a party stream of its own, costing
+        // six H.264 ones): back to the shared H.264 stream, rather than nothing.
+        if (err.status === 429 && stepBack) {
+          ({ codec, q: quality } = stepBack);
+          stepBack = null;
+          keep.set("frunk-car-codec", codec);
+          f.toast("FSP is busy, so staying on H.264", 5000);
+          return open(false);
+        }
         retryAt = Date.now() + 10_000;
         f.toast(err.message, 5000);
       },
