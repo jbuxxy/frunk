@@ -1652,7 +1652,7 @@
 
   // ---------- Shared with party.js (Watch Party) ----------
   const frunk = (window.frunk = {
-    api, toast, pressed, paintAvatar, loadQr, copyText, launch, render, openSignIn, personToggle,
+    api, toast, pressed, paintAvatar, loadQr, copyText, launch, render, openSignIn, personToggle, checkShared,
     isTesla, inFullscreen, params, assetV: ASSET_V,
     party: null, // set by party.js
   });

@@ -1085,6 +1085,7 @@ on("POST", "/api/admin/send-tile", "admin", async ({ req, res, user }) => {
     else {
       const copy = { ...site, id: crypto.randomUUID() };
       accounts.addSharedTile(target, copy, { tile: copy.id, name: site.name, from: user.name || user.email, at: Date.now() });
+      parties.notify(target.id, { type: "shared" }); // on their screen now, not at their next refresh
       result.sent.push(label);
     }
   }
@@ -1294,7 +1295,7 @@ on("GET", "/api/party/:code/car/:load/info", "party", async ({ res, params, who 
 });
 // A party car's quiet note (car.js: after its first minute, and when it steps down),
 // kept by FSP with its own for the owner's Car check page. One a minute per person.
-const CAR_NOTE_FIELDS = ["why", "ua", "gpu", "tier", "cores", "decoder", "codec", "quality", "sourceFps", "fps", "seconds", "sound", "decodes"];
+const CAR_NOTE_FIELDS = ["why", "ua", "gpu", "tier", "cores", "decoder", "codec", "quality", "sourceFps", "fps", "seconds", "sound", "decodes", "soundLead", "waiting", "due", "decodeMs", "clockStalled"];
 const carNotes = new Map(); // who -> last note time
 on("POST", "/api/party/:code/car/:load/note", "party", async ({ req, res, params, who }) => {
   const c = partner && parties.carFor(params.code, who, params.load);
@@ -1353,7 +1354,7 @@ on("GET", "/api/party/:code/car/:load/stream", "party", async ({ req, res, url, 
   }
   res.writeHead(200, {
     "content-type": "video/mp2t", "cache-control": "no-store", "x-content-type-options": "nosniff",
-    "x-accel-buffering": "no", "x-stream-pos": r.headers.get("x-stream-pos") || "0",
+    "x-accel-buffering": "no", "x-stream-pos": r.headers.get("x-stream-pos") || "0", "x-stream-q": r.headers.get("x-stream-q") || "",
   });
   const body = Readable.fromWeb(r.body);
   body.on("error", () => res.end());

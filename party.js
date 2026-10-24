@@ -223,6 +223,11 @@ function createParties({ sourcesFor, browse, start, art, person, carFor = () => 
     sourcesFor,
     lobbyList,
 
+    // A message for one person's open home screens (their lobby streams).
+    notify(userId, msg) {
+      for (const l of lobby) if (l.userId === userId) send(l.res, msg);
+    },
+
     watchLobby(req, res, userId) {
       const entry = { res, userId };
       openStream(req, res, () => lobby.delete(entry));

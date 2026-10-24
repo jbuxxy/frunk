@@ -76,7 +76,9 @@
       $("partyJoinText").textContent = mine ? "Your party · Rejoin" : one ? `${one.host.name} is hosting · Join` : `${others.length} parties · Join`;
       $("partyJoinDot").style.background = (one && one.host.color) || "var(--green)";
     }
-    $("partyHostBtn").hidden = !me || !!session || !!mine || !sources.length;
+    // Shown even with nothing connected yet (it offers to connect an app), so it isn't
+    // just missing for someone who hasn't connected Plex.
+    $("partyHostBtn").hidden = !me || !!session || !!mine || (!sources.length && !appList.length);
   }
 
   $("partyHostBtn").onclick = () => host();
@@ -114,6 +116,7 @@
     const es = new EventSource("/api/party/lobby");
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
+      if (msg.type === "shared") return f.checkShared(); // an admin just sent a tile
       if (msg.type !== "lobby") return;
       lobby = msg.parties;
       renderBar();
@@ -154,6 +157,11 @@
   // ---------- Hosting and joining ----------
   // Hosting starts with the setup sheet; Frunk remembers the choices.
   function host() {
+    if (!sources.length) {
+      // Nothing to play from yet: connect an app first (Plex covers FSP).
+      renderApps();
+      return $("appsDialog").showModal();
+    }
     let values = { ...DEFAULT_CHOICES, ...store.lget("frunk-party-choices") };
     const paint = () => renderChoices($("partySetupChoices"), values, (key, value) => {
       values = { ...values, [key]: value };
@@ -340,6 +348,21 @@
     $("partyGuest").showModal();
   }
   let guestName = null;
+  async function rejoinAsGuest(code) {
+    const saved = store.get("frunk-party");
+    let r;
+    try {
+      r = await f.api(`/api/party/${encodeURIComponent(code)}/join`, {
+        method: "POST",
+        body: JSON.stringify({ member: saved && saved.code === code ? saved.member : undefined }),
+      });
+    } catch {
+      return false; // no guest pass for this party: ask for a name
+    }
+    if (r.waiting) waitFor(code);
+    else await enter(r);
+    return true;
+  }
 
   // Back to the home screen as it was.
   function finish(message) {
@@ -1481,7 +1504,9 @@
           $("partyCodeDialog").showModal();
         } else if (code) {
           history.replaceState(null, "", "/");
-          guestFlow(code);
+          // Back in a party this browser already joined as a guest (a closed tab, the car
+          // waking up): the same guest again, not a new one with the same name.
+          if (!(await rejoinAsGuest(code))) guestFlow(code);
         } else if (saved) {
           join(saved.code, { quiet: true });
         }

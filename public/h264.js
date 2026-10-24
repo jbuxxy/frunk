@@ -111,15 +111,25 @@
     this.waitingForKey = false;
     this.queue.push({ data: au, key: key, pts: pts });
     this.canPlay = true;
-    // More than ~2 s piled up: this device can't keep up. Skip to the newest keyframe
-    // (dropping P-frames alone would smear the picture) and say so.
-    if (this.queue.length > this.fps * 2) {
+    // More than ~2 s of pictures due and not yet decoded: this device can't keep up. Skip
+    // to the newest keyframe (dropping P-frames alone would smear the picture) and say so.
+    // Pictures waiting for the sound to reach them don't count: that's up to a second
+    // more on a car whose sound runs well ahead, and counting it stepped a car that was
+    // keeping up down to MPEG-1.
+    // Not in a stream's first 5 s either, while the decoder warms up on the opening burst.
+    if (this.queue.length > this.fps * 2 && this.frames > this.fps * 5 && this.due() > this.fps * 2) {
       var last = -1;
       for (var i = this.queue.length - 1; i > 0; i--) if (this.queue[i].key) { last = i; break; }
       if (last > 0) this.queue = this.queue.slice(last);
       this.onBehind();
     }
     this.pump();
+  };
+  // How many queued pictures could be decoded now (at the front; the rest wait their turn).
+  H264Video.prototype.due = function () {
+    var n = 0;
+    while (n < this.queue.length && !early(this.queue[n].pts, this.clock, this.lead)) n++;
+    return n;
   };
   H264Video.prototype.decode = function () { this.pump(); return false; };
   H264Video.prototype.pump = function () {
@@ -330,6 +340,12 @@
       cores: navigator.hardwareConcurrency || null, decoder: s.codec === 'h264' ? s.backend : 'mpeg1',
       codec: s.codec, quality: s.q, sourceFps: s.fps || null, fps: secs ? +(s.frames / secs).toFixed(1) : 0,
       seconds: Math.round(secs), sound: ctx ? ctx.state : 'none', title: s.title, decodes: matrixText(matrix),
+      // What the sound sync was doing: sound queued ahead (ms), and pictures waiting.
+      soundLead: s.player && s.player.audioOut ? Math.round(s.player.audioOut.enqueuedTime * 1000) : null,
+      waiting: s.player && s.player.video && s.player.video.queue ? s.player.video.queue.length : null,
+      due: s.player && s.player.video && s.player.video.due ? s.player.video.due() : null,
+      decodeMs: s.player && s.player.video && s.player.video.lead != null ? Math.round(s.player.video.lead * 1000) : null,
+      clockStalled: s.player && s.player.clockStalled ? 1 : 0,
     };
   }
 
@@ -370,7 +386,14 @@
       // JSMpeg reckons what's queued by the system clock, but sound plays by the audio
       // device's; one a little slow piled sound up unseen (memory, and sound falling
       // behind the picture). Reckon it by the device's, so maxAudioLag sees the real lead.
-      if (this.context && this.unlocked) this.wallclockStartTime = performance.now() / 1000 + this.startTime - this.context.currentTime;
+      // Very gently: a real car's audio clock moves in coarse steps (tens of ms), and
+      // following each step let pictures out in bunches (a stuttering picture in a Tesla,
+      // and a queue that looked like the car falling behind). A 64th per chunk (~1.7 s)
+      // evens the steps out and still follows real drift.
+      if (this.context && this.unlocked) {
+        var by = performance.now() / 1000 + this.startTime - this.context.currentTime - this.wallclockStartTime;
+        this.wallclockStartTime += Math.abs(by) > 0.5 ? by : by / 64;
+      }
       return r;
     };
     W.prototype.cushioned = true;
@@ -391,10 +414,19 @@
   }
   // Where the sound playing now is in the stream: the first sound packet's timestamp,
   // plus what's been decoded since, less what's still queued to play.
+  // A sound clock that stops (a car's audio paused or stuck, the browser still calling it
+  // running) mustn't hold the pictures: checked each second, and while it moves at less
+  // than half speed, pictures go at their own pace.
   function soundClock(player) {
     var a = player.audio, out = player.audioOut;
     if (!a || a.firstPts == null || !out) return null;
-    return a.firstPts + a.decodedTime - out.enqueuedTime;
+    var clock = a.firstPts + a.decodedTime - out.enqueuedTime;
+    var now = performance.now() / 1000, w = player.clockWatch;
+    if (!w || now - w.at >= 1) {
+      if (w) player.clockStalled = clock - w.clock < 0.5 * (now - w.at);
+      player.clockWatch = { at: now, clock: clock };
+    }
+    return player.clockStalled ? null : clock;
   }
   function syncPictures() {
     var J = window.JSMpeg;

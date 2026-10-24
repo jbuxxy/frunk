@@ -32,6 +32,12 @@ window.frunkCar = (() => {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
+  // Once: forget step downs saved before October 2026's fix (pictures waiting for the
+  // sound were taken for a car falling behind, which stepped cars down to MPEG-1).
+  if (keep.get("frunk-car-reset") !== "1") {
+    try { localStorage.removeItem("frunk-car-codec"); localStorage.removeItem("frunk-car-q"); } catch {}
+    keep.set("frunk-car-reset", "1");
+  }
   let codec = "mpeg1";
   let quality = 720;
   let backend = null;
@@ -49,7 +55,7 @@ window.frunkCar = (() => {
   }
   // A step down (H264.nextStep, shared with FSP's player), at most one per 15 s.
   function stepDown() {
-    const next = window.H264.nextStep({ codec, q: quality });
+    const next = window.H264.nextStep({ codec, q: sharedQ || quality }); // from what it plays
     if (!next || Date.now() - steppedAt < 15_000) return;
     steppedAt = Date.now();
     carNote("stepped down");
@@ -59,6 +65,7 @@ window.frunkCar = (() => {
       stepBack = { codec, q: quality };
     }
     ({ codec, q: quality } = next);
+    sharedQ = null;
     f.toast(next.message, 4000);
     stop(true);
     open(false); // the party's shared stream for the new setting
@@ -73,6 +80,7 @@ window.frunkCar = (() => {
   let openedAt = 0;
   let lastFrame = 0;
   let retryAt = 0; // after a failed start, wait before trying again
+  let sharedQ = null; // the quality of this stretch's shared stream, once joined (see open)
   let stepBack = null; // { codec, q } before a step down to MPEG-1, in case FSP has no room for it
   let rejoinedAt = 0; // when this car last rejoined the shared stream to catch up
   let streamAt; // the party's state.at this stream belongs to (see sync)
@@ -111,9 +119,14 @@ window.frunkCar = (() => {
     frames = 0;
     noteStart = 0;
     const me = canvas;
-    const url = `${base}/stream?codec=${codec}&q=${quality}${solo ? `&solo=${Math.random().toString(36).slice(2, 10)}` : ""}`;
+    const url = `${base}/stream?codec=${codec}&q=${sharedQ || quality}${solo ? `&solo=${Math.random().toString(36).slice(2, 10)}` : ""}`;
     const Source = window.H264.fetchSource(
-      (headers) => { joinPos = parseFloat(headers.get("x-stream-pos")) || 0; },
+      (headers) => {
+        joinPos = parseFloat(headers.get("x-stream-pos")) || 0;
+        // The quality FSP gave this car (a 720p car shares a 480p stretch); ask for that
+        // again when reconnecting, so a reconnect (FSP restarting) can't start a second encode.
+        sharedQ = Number(headers.get("x-stream-q")) || null;
+      },
       (err) => {
         if (canvas !== me) return;
         stop(true);
@@ -216,6 +229,7 @@ window.frunkCar = (() => {
         // falling out of step, which would also have looked like drift; see below).
         streamAt = at;
         rejoinedAt = 0;
+        sharedQ = null; // a new stretch: this car's own quality again
         if (player) {
           stop(true);
           return open(false);

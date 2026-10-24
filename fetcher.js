@@ -3,6 +3,13 @@
 // signed-in user can't use Frunk to read services on the server's network.
 // The check runs at DNS lookup time for every hop, so redirects and DNS tricks
 // can't sneak past it.
+//
+// One exception: a public site that this network's own DNS sends to a LAN address
+// (split DNS: example.com reaching your reverse proxy directly). If public DNS gives
+// the name only public addresses, it's a public site, and over HTTPS the local route
+// is fine: the certificate has to match the name, which a device on the network can't
+// fake for someone else's domain (so a name that public DNS and this network's DNS
+// answer differently on purpose gets nowhere). Plain HTTP to such a name is refused.
 const http = require("node:http");
 const https = require("node:https");
 const dns = require("node:dns");
@@ -30,14 +37,45 @@ function blockedError(ip) {
   return Object.assign(new Error(`refusing to fetch private address ${ip}`), { code: "EPRIVATE" });
 }
 
-function publicOnlyLookup(hostname, options, callback) {
-  dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
-    if (err) return callback(err);
-    const bad = addresses.find((a) => isPrivate(a.address));
-    if (bad) return callback(blockedError(bad.address));
-    if (options.all) return callback(null, addresses);
-    callback(null, addresses[0].address, addresses[0].family);
+// Public DNS (DNS over HTTPS) for a name: true if it has addresses and all are public.
+// Remembered for 10 minutes; false when public DNS can't be asked.
+const PUBLIC_DNS = process.env.PUBLIC_DNS_URL || "https://cloudflare-dns.com/dns-query";
+const publicNames = new Map(); // hostname -> { ok, at }
+function publicInDns(hostname) {
+  const hit = publicNames.get(hostname);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return Promise.resolve(hit.ok);
+  const ask = (type) => new Promise((resolve) => {
+    const req = https.get(`${PUBLIC_DNS}?name=${encodeURIComponent(hostname)}&type=${type}`, { headers: { accept: "application/dns-json" }, timeout: 4000 }, (res) => {
+      let text = "";
+      res.on("data", (c) => { if (text.length < 65536) text += c; });
+      res.on("end", () => {
+        try { resolve((JSON.parse(text).Answer || []).filter((a) => a.type === 1 || a.type === 28).map((a) => a.data)); } catch { resolve(null); }
+      });
+    });
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => resolve(null));
   });
+  return Promise.all([ask("A"), ask("AAAA")]).then(([a, aaaa]) => {
+    const all = a && aaaa ? [...a, ...aaaa] : null;
+    const ok = !!all && all.length > 0 && all.every((ip) => net.isIP(ip) && !isPrivate(ip));
+    if (publicNames.size > 500) publicNames.clear();
+    publicNames.set(hostname, { ok, at: Date.now() });
+    return ok;
+  });
+}
+
+// The lookup for a fetch: public addresses only, except a public HTTPS site this
+// network routes privately (see the top).
+function publicOnlyLookup(secure) {
+  return (hostname, options, callback) => {
+    dns.lookup(hostname, { ...options, all: true }, async (err, addresses) => {
+      if (err) return callback(err);
+      const bad = addresses.find((a) => isPrivate(a.address));
+      if (bad && !(secure && (await publicInDns(hostname)))) return callback(blockedError(bad.address));
+      if (options.all) return callback(null, addresses);
+      callback(null, addresses[0].address, addresses[0].family);
+    });
+  };
 }
 
 function request(url, { allowPrivate, headers, timeout, maxBytes }) {
@@ -47,7 +85,7 @@ function request(url, { allowPrivate, headers, timeout, maxBytes }) {
     const lib = url.protocol === "https:" ? https : http;
     const req = lib.get(url, {
       headers: { "accept-encoding": "gzip, deflate, br", ...headers },
-      lookup: allowPrivate ? undefined : publicOnlyLookup,
+      lookup: allowPrivate ? undefined : publicOnlyLookup(url.protocol === "https:"),
       timeout,
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -93,4 +131,4 @@ async function get(rawUrl, { allowPrivate = false, headers = {}, timeout = 6000,
   throw new Error("too many redirects");
 }
 
-module.exports = { get, isPrivate };
+module.exports = { get, isPrivate, publicInDns };

@@ -28,3 +28,20 @@ test("fetching private addresses needs allowPrivate", async (t) => {
   assert.equal(ok.buf.toString(), "hello");
   assert.equal(ok.url, `http://127.0.0.1:${port}/`);
 });
+
+// Public DNS unreachable: a name that resolves to this machine stays refused, over HTTPS
+// as well (the split-DNS exception, for a public site this network routes to a LAN
+// address, needs public DNS to vouch for the name).
+test("a privately resolving name over HTTPS needs public DNS to vouch for it", async () => {
+  const before = process.env.PUBLIC_DNS_URL;
+  process.env.PUBLIC_DNS_URL = "https://127.0.0.1:9/dns-query";
+  delete require.cache[require.resolve("../fetcher")];
+  const fetcher = require("../fetcher");
+  try {
+    await assert.rejects(fetcher.get("https://localhost/"), { code: "EPRIVATE" });
+    assert.equal(await fetcher.publicInDns("localhost"), false);
+  } finally {
+    if (before === undefined) delete process.env.PUBLIC_DNS_URL; else process.env.PUBLIC_DNS_URL = before;
+    delete require.cache[require.resolve("../fetcher")];
+  }
+});

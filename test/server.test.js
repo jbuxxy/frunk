@@ -290,8 +290,11 @@ test("admins send one of their tiles to other people's pages", async (t) => {
   const send = (body) => srv.request("POST", "/api/admin/send-tile", { cookie: admin, body });
 
   // Sent once: a copy (new id) lands at the end of their page; yourself is ignored.
+  // Their open home screen hears about it at once (its lobby stream), not at a refresh.
   const before = (await srv.request("GET", "/api/sites", { cookie: member })).body.length;
+  const lobby = await events(srv, "/api/party/lobby", member);
   const first = await send({ tile: mine[0].id, to: [memberId, ownerId] });
+  assert.equal((await lobby.nextOf("shared")).type, "shared");
   assert.equal(first.status, 200);
   assert.equal(first.body.sent.length, 1);
   const theirs = (await srv.request("GET", "/api/sites", { cookie: member })).body;
