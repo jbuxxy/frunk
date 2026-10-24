@@ -31,10 +31,12 @@ the browser into fullscreen with one tap.
 <sub>Screenshots at 1920×1200, the resolution of the Model 3 and Model Y center screen.</sub>
 
 - **Fullscreen.** Tesla's browser goes fullscreen on youtube.com and stays that way
-  after you leave. The first time you tap a tile in the car, Frunk offers to route
-  you through `youtube.com/redirect`. You tap "Go to site" once, land back on Frunk
-  in fullscreen, and the tile you picked opens. The browser's back button returns
-  to Frunk.
+  after you leave. The first time you tap a video tile in the car (YouTube, Netflix,
+  Disney+ and the like), Frunk offers to route you through `youtube.com/redirect`.
+  You tap "Go to site" once, land back on Frunk in fullscreen, and the tile you
+  picked opens. The browser's back button returns to Frunk. Whether a tile asks is
+  its **Ask to go fullscreen first** setting: on for video services, off for
+  everything else (an FSP tile plays in the page and doesn't need it).
 - **Rear screen.** Because the car treats that session as the YouTube Theater app,
   cars with a rear display offer **Join Front Display**. Rear passengers can keep
   watching after the car shifts out of Park. A Watch Party doesn't need fullscreen:
@@ -43,7 +45,9 @@ the browser into fullscreen with one tap.
 - **Tiles.** Logos and colors are filled in automatically from
   [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons) and
   [Simple Icons](https://simpleicons.org). You can also pick another logo or color.
-  Hold a tile for its menu; in edit mode, hold and drag to reorder.
+  Hold a tile for its menu; in edit mode, hold and drag to reorder. An admin can
+  send a tile to other people: it lands at the end of their page, with a notice on
+  their screen (at once if Frunk is open, otherwise at their next visit).
 - **Your own color.** Each person picks the color of their profile circle by
   tapping it in their account menu.
 - **Accounts.** Invite-only. People sign in with Google or a password, and each
@@ -56,12 +60,17 @@ the browser into fullscreen with one tap.
   every screen, with a chat, emoji and one-tap reactions that float over the
   video. The host picks who else may play, pause and skip. Hosts play from
   their own Plex or Audiobookshelf account (connected under **Connected apps**
-  in the account menu); guests need nothing but Frunk. Everyone watches one
-  Plex transcode, so the server does the work once. Admins also get a test video.
+  in the account menu; the Watch Party button offers to connect one if you
+  haven't); guests need nothing but Frunk. Everyone watches one Plex transcode,
+  so the server does the work once. Admins also get a test video.
+  **Talk:** hold the Talk button to speak to everyone, like a walkie-talkie; one
+  person at a time, and the video dips while someone talks. The host picks who may
+  talk. (Tesla turns the microphone off in fullscreen.)
   The host chooses who can join (people with an account right away or after
   asking; people without one not at all, after asking, or right away, as a
-  guest of that one party) and can remove anyone. New chat messages chime and
-  show a banner while the party is minimized.
+  guest of that one party) and can remove anyone. A guest who closes the page and
+  comes back rejoins as the same guest. New chat messages chime and show a banner
+  while the party is minimized.
 - **No dependencies.** A single Node.js server with no npm packages, and a
   vanilla JS front end.
 
@@ -95,7 +104,7 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `PLEX_URL` | Your Plex server, e.g. `https://plex.example.com`, for the Watch Party. People connect by entering a code at plex.tv/link; Frunk keeps a token for this server only. |
 | `ABS_URL` | Your Audiobookshelf server, e.g. `https://abs.example.com`, for the Watch Party. People connect their own account to it with an API key; Frunk only ever talks to this address. |
 | `FSP_URL`, `FSP_SECRET` | Optional: an FSP (Front Seat Plex) server on your LAN and its partner secret. In the Tesla, Plex parties then play on a canvas the car doesn't pause while driving, one shared stream per party (H.264 from FSP's iGPU at 720p on newer cars and 480p on older ones, MPEG-1 for cars that can't keep up). Without it the car uses the normal player, which Drive pauses. |
-| `FSP_PUBLIC_URL` | Optional: FSP's public address, e.g. `https://fsp.example.com`. A FSP tile then counts as Plex in a Watch Party: badged, and it opens the Plex picker. |
+| `FSP_PUBLIC_URL` | Optional: FSP's public address, e.g. `https://fsp.example.com`. Party cars then stream straight from FSP (with a one-time ticket Frunk gets for them), so Frunk passes no video on; without it, Frunk relays each car's stream. And an FSP tile counts as Plex in a Watch Party: badged, and it opens the Plex picker. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
 
@@ -166,6 +175,11 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 **Fetching from your network**
 - Only admins' tiles (and the default page) may fetch icons from private or local
   addresses. Other users can't use Frunk to reach the server's network.
+- One exception, for everyone: a public HTTPS site that your own DNS sends to a
+  LAN address (split DNS, e.g. your reverse proxy). If public DNS gives the name
+  only public addresses, its icon is fetched over the LAN route, and its
+  certificate must match the name, which a device on your network can't fake for
+  someone else's domain. Plain HTTP to such a name is refused.
 
 **Watch Party**
 - Connected apps only talk to the servers named in the environment, so a key
@@ -173,8 +187,10 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
   account on the server and never sent back to a browser.
 - Guests stream what the host plays through Frunk, and only while they're in
   that party; each new choice gets new addresses.
-- The car player's stream comes from FSP through Frunk, asked for with the
-  host's key and a shared secret over your LAN; neither reaches a browser.
+- The car player's stream is asked for from FSP with the host's key and a shared
+  secret over your LAN; neither reaches a browser. With `FSP_PUBLIC_URL` set, the
+  car gets a ticket for its stream instead: random, single use, valid for a
+  minute, and good for that one stream only.
 - A guest without an account gets a pass (an HttpOnly cookie) for that one
   party: it reaches the party's own routes and nothing else, can't choose what
   plays, and stops working when the party ends or the host removes them. Guest
