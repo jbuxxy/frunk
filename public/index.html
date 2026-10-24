@@ -177,6 +177,20 @@
     </form>
   </dialog>
 
+  <!-- A Plex tile in the car: FSP plays while driving, Plex's own player doesn't -->
+  <dialog class="sheet narrow" id="plexPrompt">
+    <form method="dialog">
+      <button type="button" class="sheet-x" data-close aria-label="Close">&times;</button>
+      <h2>Watch Plex in FSP?</h2>
+      <p class="hint">Plex's own player stops when the car is moving. FSP plays your Plex library and keeps going while you drive.</p>
+      <div class="menu">
+        <button type="button" class="pill accent" id="plexPromptFsp">Open FSP</button>
+        <button type="button" class="pill" id="plexPromptPlex">Open Plex anyway</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="plexPromptRemember"><span>Remember my choice<span class="check-hint">On this car. To be asked again, hold the Plex tile.</span></span></label>
+    </form>
+  </dialog>
+
   <!-- First tile tap in the car without fullscreen -->
   <dialog class="sheet narrow" id="fsPrompt">
     <form method="dialog">
@@ -200,6 +214,7 @@
         <button type="button" class="pill" id="tileMenuEdit">Edit</button>
         <button type="button" class="pill" id="tileMenuArrange">Rearrange tiles</button>
         <button type="button" class="pill" id="tileMenuSend" hidden>Send to someone…</button>
+        <button type="button" class="pill" id="tileMenuPlexAsk" hidden>Ask about FSP again</button>
         <button type="button" class="pill danger" id="tileMenuRemove">Remove</button>
         <button type="button" class="pill" id="tileMenuCancel" data-close>Cancel</button>
       </div>

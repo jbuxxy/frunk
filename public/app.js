@@ -28,6 +28,8 @@
     sget(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
     sset(k, v) { try { sessionStorage.setItem(k, v); } catch {} },
     sdel(k) { try { sessionStorage.removeItem(k); } catch {} },
+    lget(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    lset(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
 
   // ---------- Fullscreen via the YouTube redirect ----------
@@ -365,10 +367,34 @@
     return VIDEO_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
   }
   const asksFullscreen = (site) => (typeof site.fullscreen === "boolean" ? site.fullscreen : fullscreenByDefault(site.url));
-  function launch(site) {
+  // A Plex tile in the car (when Frunk knows an FSP): offer FSP, whose player keeps going
+  // while driving. A remembered choice ("fsp" or "plex", this car only) skips the question.
+  const isPlexTile = (site) => isTesla && me.fsp && me.fsp.plexHosts.includes(hostOf(site.url));
+  function launch(site, { plexAsked = false } = {}) {
+    if (!plexAsked && isPlexTile(site)) {
+      const kept = store.lget("frunk-plex-choice");
+      if (kept === "fsp") return location.assign(me.fsp.url);
+      if (kept !== "plex") return openPlexPrompt(site);
+    }
     if (wantsFullscreen && !fsPromptShown && asksFullscreen(site)) return openFullscreenPrompt(site);
     location.assign(site.url);
   }
+
+  const plexPrompt = $("plexPrompt");
+  let plexSite = null;
+  function openPlexPrompt(site) {
+    plexSite = site;
+    $("plexPromptRemember").checked = false;
+    plexPrompt.showModal();
+  }
+  function plexChoice(choice) {
+    if ($("plexPromptRemember").checked) store.lset("frunk-plex-choice", choice);
+    plexPrompt.close();
+    if (choice === "fsp") location.assign(me.fsp.url);
+    else launch(plexSite, { plexAsked: true });
+  }
+  $("plexPromptFsp").onclick = () => plexChoice("fsp");
+  $("plexPromptPlex").onclick = () => plexChoice("plex");
 
   const fsPrompt = $("fsPrompt");
   let fsSite = null;
@@ -587,8 +613,14 @@
     $("tileMenuName").textContent = site.name;
     // Admins can copy their own tiles to other people (not tiles on the public default page).
     $("tileMenuSend").hidden = !me.user?.admin || editTarget === "default";
+    $("tileMenuPlexAsk").hidden = !isPlexTile(site) || !store.lget("frunk-plex-choice");
     tileMenu.showModal();
   }
+  $("tileMenuPlexAsk").onclick = () => {
+    try { localStorage.removeItem("frunk-plex-choice"); } catch {}
+    tileMenu.close();
+    toast("Plex will ask about FSP again");
+  };
   $("tileMenuEdit").onclick = () => {
     tileMenu.close();
     openSiteDialog(menuId);

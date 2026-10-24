@@ -692,6 +692,8 @@ test("watch party in the car: a Plex party streams through FSP, shared per stret
     ["plex", ["127.0.0.1", "app.plex.tv"], "/api/dash/plex"],
     ["fsp", ["fsp.example"], "/api/party/source-icon/fsp"],
   ]);
+  // In the car a Plex tile offers FSP: where FSP is, and which addresses are Plex (to anyone).
+  assert.deepEqual((await srv.request("GET", "/api/me")).body.fsp, { url: "https://fsp.example/", plexHosts: ["127.0.0.1", "app.plex.tv", "plex.tv", "watch.plex.tv"] });
   const icon = await srv.request("GET", "/api/party/source-icon/fsp");
   assert.equal(icon.headers.get("content-type"), "image/svg+xml");
   assert.equal((await srv.request("GET", "/api/party/source-icon/plex")).status, 404);

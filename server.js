@@ -838,6 +838,8 @@ on("GET", "/api/me", "anyone", ({ res, user }) => json(res, 200, {
   googleClientId: GOOGLE_ID || undefined,
   version: APP_VERSION,
   build: BUILD,
+  // In the car, a Plex tile offers FSP instead (Plex's own player stops when the car moves).
+  fsp: FSP_PUBLIC && apps.byId("plex") ? { url: `${FSP_PUBLIC}/`, plexHosts: [...apps.byId("plex").hosts, "plex.tv", "watch.plex.tv"] } : undefined,
 }));
 on("GET", "/auth/google", "anyone", ({ req, res }) => {
   if (!GOOGLE_ID) return redirect(res, "/?signin_error=not_setup");
