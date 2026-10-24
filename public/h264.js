@@ -352,7 +352,11 @@
   // the next right away, still with nothing in hand. After a gap, start it a little
   // ahead instead, and let a bit more be queued, so jitter doesn't run it dry again.
   var CUSHION = 0.15;
-  var MAX_AUDIO_LAG = 0.25 + 2 * CUSHION; // what JSMpeg may have queued before it drops sound
+  // What JSMpeg may have queued before it throws sound away. A Watch Party car starts up
+  // to a second ahead (from the last keyframe) and ffmpeg sends in ~1/3 s bursts, so at
+  // 0.55 s a party car threw sound away (a gap) every few seconds. Pictures wait for the
+  // sound, so a longer queue costs nothing in sync.
+  var MAX_AUDIO_LAG = 1;
   function cushionSound() {
     var W = window.JSMpeg && window.JSMpeg.AudioOutput && window.JSMpeg.AudioOutput.WebAudio;
     if (!W || W.prototype.cushioned) return;
@@ -362,7 +366,12 @@
         this.startTime = this.context.currentTime + CUSHION;
         this.wallclockStartTime = performance.now() / 1000 + CUSHION;
       }
-      return play.apply(this, arguments);
+      var r = play.apply(this, arguments);
+      // JSMpeg reckons what's queued by the system clock, but sound plays by the audio
+      // device's; one a little slow piled sound up unseen (memory, and sound falling
+      // behind the picture). Reckon it by the device's, so maxAudioLag sees the real lead.
+      if (this.context && this.unlocked) this.wallclockStartTime = performance.now() / 1000 + this.startTime - this.context.currentTime;
+      return r;
     };
     W.prototype.cushioned = true;
   }
