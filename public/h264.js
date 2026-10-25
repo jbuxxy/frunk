@@ -128,6 +128,9 @@
     // pictures stop coming, then arrive in a burst, which a decoder that takes a few ms a
     // picture catches up on by itself; stepping down there only made it look worse.
     // And it has to last 5 s: a busy moment (a burst arriving) delays a few pictures.
+    // A buffered (steady) player never skips: a late picture is decoded but not drawn
+    // (see pump), and done() says if that goes on.
+    if (this.steady) { this.pump(); return; }
     if (this.queue.length > this.fps * 2 && this.frames > this.fps * 5 && this.due() > this.fps * 2) {
       var now = performance.now() / 1000;
       this.behindSince = this.behindSince || now;
@@ -151,10 +154,18 @@
   };
   H264Video.prototype.decode = function () { this.pump(); return false; };
   H264Video.prototype.pump = function () {
+    // A picture that never came back (a decoder that stalled without an error, seen with
+    // a minute of pictures in hand): start the decoder over, from the next keyframe. Not
+    // sooner: on a busy device a picture took over 1.5 s, and starting over cost a skip.
+    if (this.busy && performance.now() - this.sentAt > 4000) this.restart();
     if (this.busy || !this.queue.length || !this.backend.ready) return;
+    if (this.steady && this.clock == null) return; // no sound playing yet: nothing's due
     // Not yet: the sound hasn't reached this picture (less the time decoding takes).
     if (early(this.queue[0].pts, this.clock, this.lead, this.maxWait)) return;
     var au = this.queue.shift();
+    // Behind the sound (the decoder was held up): decoded, so the next ones decode, but
+    // not drawn, so the picture catches up at once instead of racing through.
+    this.hide = !!this.steady && au.pts != null && au.pts < this.clock - LATE;
     this.busy = true;
     this.sentAt = performance.now();
     this.backend.decode(au);
@@ -171,6 +182,13 @@
       this.decodedTime += 1 / this.fps;
       if (this.onDecode) this.onDecode(this, 0);
     }
+    // Late for 5 s on end: this device can't keep up (the hint offers a lower quality).
+    if (this.steady) {
+      var now = performance.now() / 1000;
+      if (!this.hide) this.lateSince = 0;
+      else if (!this.lateSince) this.lateSince = now;
+      else if (now - this.lateSince > 5) { this.lateSince = now; this.onBehind(); }
+    }
     this.pump();
   };
   // WebCodecs didn't work on this device: carry on with the WebAssembly decoder, drawn
@@ -186,9 +204,23 @@
       } catch (e) { /* the canvas already has a 2D context: nothing more to do */ }
     }
     this.backend = new WasmBackend(this);
-    this.waitingForKey = true;
     this.busy = false;
-    this.queue = [];
+    // Carry on from the next keyframe in hand (with a buffer, that's a minute of pictures:
+    // dropping them all froze the picture while the sound played on).
+    var key = -1;
+    for (var i = 0; i < this.queue.length; i++) if (this.queue[i].key) { key = i; break; }
+    this.queue = key >= 0 ? this.queue.slice(key) : [];
+    this.waitingForKey = key < 0;
+  };
+  H264Video.prototype.restart = function () {
+    this.restarts = (this.restarts || 0) + 1;
+    this.backend.destroy();
+    this.backend = this.backend instanceof WasmBackend ? new WasmBackend(this) : new WebCodecsBackend(this);
+    this.busy = false;
+    var key = -1;
+    for (var i = 0; i < this.queue.length; i++) if (this.queue[i].key) { key = i; break; }
+    this.queue = key >= 0 ? this.queue.slice(key) : [];
+    this.waitingForKey = key < 0;
   };
   H264Video.prototype.seek = function () {};
   H264Video.prototype.destroy = function () {
@@ -232,7 +264,7 @@
     var dec = this.dec;
     if (m.type === 'none') return dec.done(false);
     var r = dec.destination; // JSMpeg's WebGL renderer
-    if (r) {
+    if (r && !dec.hide) {
       if (m.width !== this.w || m.height !== this.h) { this.w = m.width; this.h = m.height; r.resize(m.width, m.height); }
       var pic = new Uint8Array(m.data), ys = m.width * m.height, cs = ys >> 2;
       // Same plane order JSMpeg's MPEG-1 decoder hands its renderer (Y, Cr, Cb). The
@@ -259,7 +291,7 @@
         var c = dec.options.canvas;
         if (c.width !== frame.displayWidth || c.height !== frame.displayHeight) { c.width = frame.displayWidth; c.height = frame.displayHeight; }
         self.ctx = self.ctx || c.getContext('2d');
-        self.ctx.drawImage(frame, 0, 0, c.width, c.height);
+        if (!dec.hide) self.ctx.drawImage(frame, 0, 0, c.width, c.height);
         frame.close();
         dec.done(true);
       },
@@ -467,6 +499,7 @@
   }
   // Seconds of the stream in hand (received, not yet heard), compressed or not.
   function buffered(player) {
+    if (player.steady) return player.steady.have();
     var a = player.audio, out = player.audioOut;
     if (!a || a.firstPts == null || a.lastPts == null || !out) return 0;
     return a.lastPts - (a.firstPts + a.decodedTime - out.enqueuedTime);
@@ -533,6 +566,7 @@
         return write.apply(this, arguments);
       };
       C.prototype.decode = function () {
+        if (this.steady && this.clock == null) return false; // no sound playing yet
         if (this.times && early(this.times[0], this.clock, 0, this.maxWait)) return false;
         var got = decode.apply(this, arguments);
         if (got && this.times) this.times.shift();
@@ -540,6 +574,160 @@
       };
     });
   }
+
+  // ---------- a buffered player: buffering, playing, paused ----------
+  // A solo stream (options.buffer) plays the way a streaming app's player does:
+  //  - One clock, the sound being heard: each piece of sound is scheduled here with its
+  //    timestamp, and the time is that of the piece playing now. Nothing else moves it, so
+  //    the picture can't run ahead of it or race to catch up.
+  //  - Buffering (nothing plays; onState('buffering') shows the spinner), playing, or
+  //    paused (the page hidden or asleep: its animation frames stopped). It starts with
+  //    START in hand; after running dry, it carries on only once RESUME is in hand, so a
+  //    slow connection gives one clean pause, not a stutter.
+  //  - Sound is decoded just in time (SOUND_AHEAD), the rest stays compressed; what's
+  //    decoded but not yet heard is kept, so pausing loses nothing.
+  // JSMpeg still demuxes and decodes; when the sound plays is decided here.
+  var START = 2, LATE = 0.25;
+  function Steady(player, buffer) {
+    var self = this, out = player.audioOut;
+    this.player = player;
+    this.buffer = buffer;
+    this.resumeAt = Math.min(8, buffer / 4);
+    this.state = 'buffering';
+    this.film = null; // the time while nothing plays
+    this.segs = []; // sound decoded, not yet heard: { pts, dur, buf, src, at }
+    this.next = 0; // the audio device's time the next piece starts at
+    this.started = false;
+    this.cRaw = -1; this.cAt = 0; this.cLast = 0;
+    this.lastUpdate = 0;
+    this.lowSince = 0; this.refreshedAt = 0;
+    player.steady = this;
+    if (player.video) player.video.steady = true;
+    if (out) out.play = function (rate, left, right) { self.schedule(rate, left, right); };
+    player.updateForStreaming = function () { self.update(); };
+    this.onHide = function () { if (document.visibilityState === 'hidden') self.pause(); };
+    document.addEventListener('visibilitychange', this.onHide);
+    var destroy = player.destroy;
+    player.destroy = function () {
+      document.removeEventListener('visibilitychange', self.onHide);
+      self.stopAll();
+      return destroy.apply(this, arguments);
+    };
+  }
+  Steady.prototype.emit = function (state, why) {
+    this.state = state;
+    this.why = why;
+    var on = this.player.options && this.player.options.onState;
+    if (on) on(state, why);
+  };
+  // The audio device's time, evened out: a car's moves in steps of tens of milliseconds,
+  // and following each step let pictures out in bunches. Never more than 0.1 s past the
+  // device's own, never backwards.
+  Steady.prototype.now = function () {
+    var c = this.player.audioOut.context.currentTime, p = performance.now() / 1000;
+    if (c !== this.cRaw) { this.cRaw = c; this.cAt = p; }
+    var t = Math.min(c + (p - this.cAt), c + 0.1);
+    if (t < this.cLast) t = this.cLast;
+    return (this.cLast = t);
+  };
+  // Where in the stream the sound being heard is (null before there's any).
+  Steady.prototype.time = function () {
+    if (this.state !== 'playing') return this.film;
+    var t = this.now(), s = this.segs;
+    while (s.length > 1 && s[0].at + s[0].dur <= t) s.shift();
+    if (!s.length) return this.film;
+    var x = s[0];
+    if (t < x.at) return x.pts;
+    return x.pts + Math.min(t - x.at, x.dur);
+  };
+  // Seconds in hand from here (received, not yet heard).
+  Steady.prototype.have = function () {
+    var a = this.player.audio, t = this.time();
+    return a && a.lastPts != null && t != null ? Math.max(0, a.lastPts - t) : 0;
+  };
+  // Seconds of sound scheduled ahead on the device.
+  Steady.prototype.ahead = function () {
+    return this.state === 'playing' ? Math.max(0, this.next - this.player.audioOut.context.currentTime) : 0;
+  };
+  // JSMpeg's decoder hands each piece of sound here (in place of its own output).
+  Steady.prototype.schedule = function (rate, left, right) {
+    var out = this.player.audioOut, a = this.player.audio;
+    var buf = out.context.createBuffer(2, left.length, rate);
+    buf.getChannelData(0).set(left);
+    buf.getChannelData(1).set(right);
+    // play() comes before the decoder counts this piece, so this is where it starts.
+    var seg = { pts: a.firstPts + a.decodedTime, dur: buf.duration, buf: buf, src: null, at: 0 };
+    if (this.film == null) this.film = seg.pts;
+    this.segs.push(seg);
+    if (this.state === 'playing') this.start(seg, this.next, 0);
+  };
+  Steady.prototype.start = function (seg, when, offset) {
+    var out = this.player.audioOut, src = out.context.createBufferSource();
+    src.buffer = seg.buf;
+    src.connect(out.destination);
+    out.gain.gain.value = out.volume;
+    src.start(when, offset);
+    seg.src = src;
+    seg.at = when - offset;
+    this.next = when + seg.dur - offset;
+  };
+  Steady.prototype.stopAll = function () {
+    this.segs.forEach(function (s) {
+      if (s.src) { try { s.src.stop(); s.src.disconnect(); } catch (e) { /* done */ } s.src = null; }
+    });
+  };
+  Steady.prototype.play = function () {
+    var film = this.film, ctx = this.player.audioOut.context, self = this;
+    this.started = true;
+    this.cLast = 0;
+    this.next = ctx.currentTime + 0.05;
+    this.segs = this.segs.filter(function (s) { return s.pts + s.dur > film; });
+    this.segs.forEach(function (s, i) { self.start(s, self.next, i === 0 ? Math.max(0, film - s.pts) : 0); });
+    this.emit('playing');
+  };
+  // Stops where it is, keeping what's decoded but not heard.
+  Steady.prototype.pause = function () {
+    if (this.state === 'paused') return;
+    this.film = this.time();
+    this.stopAll();
+    this.emit('paused');
+  };
+  Steady.prototype.update = function () {
+    var p = this.player, a = p.audio, v = p.video, out = p.audioOut, ctx = out && out.context;
+    var wall = performance.now() / 1000, gap = this.lastUpdate ? wall - this.lastUpdate : 0;
+    this.lastUpdate = wall;
+    if (!a || !ctx) { if (v) v.decode(); return; }
+    if (document.visibilityState === 'hidden') return this.pause();
+    // The frames stopped a while (the page asleep): carry on from where the sound was.
+    if (gap > 1 && this.state === 'playing') this.pause();
+    if (this.state === 'paused') this.emit('buffering', 'woke');
+    if (this.state === 'playing') {
+      while (this.next - ctx.currentTime < SOUND_AHEAD && a.decode()) { /* scheduled as decoded */ }
+      if (ctx.currentTime >= this.next - 0.01 && !(p.source && p.source.completed)) {
+        // Ran dry: nothing more to play. Wait for RESUME in hand, then carry on.
+        this.film = this.time();
+        this.stopAll();
+        this.emit('buffering', 'dry');
+      }
+    }
+    if (this.state === 'buffering') {
+      if (this.film == null) a.decode(); // the first piece: where the stream starts
+      if (ctx.state !== 'running' && wall - (this.resumedAt || 0) > 2) { this.resumedAt = wall; ctx.resume().catch(function () {}); }
+      var need = this.started && this.why === 'dry' ? this.resumeAt : START; // after a pause or wake: carry straight on
+      if (ctx.state === 'running' && this.film != null && (this.have() >= need || (p.source && p.source.completed))) this.play();
+    }
+    // Less than half the buffer in hand for a minute while data keeps coming: a fresh
+    // stream (a new ffmpeg bursts ahead again), at most every 3 minutes.
+    if (this.have() < this.buffer / 2 && p.source && p.source.full && !p.source.full()) {
+      this.lowSince = this.lowSince || wall;
+      if (wall - this.lowSince > 60 && wall - this.refreshedAt > 180 && p.source.refresh) { this.refreshedAt = wall; this.lowSince = 0; p.source.refresh(); }
+    } else this.lowSince = 0;
+    if (v) {
+      v.clock = this.time();
+      v.maxWait = Infinity;
+      v.decode();
+    }
+  };
 
   // ---------- the stream over plain HTTP ----------
   // A JSMpeg source reading one long HTTP response, in place of its WebSocket source: the
@@ -561,7 +749,7 @@
       this.ctl = new AbortController();
     }
     FetchSource.prototype.connect = function (destination) { this.destination = destination; };
-    FetchSource.prototype.start = function () { this.open(this.url); };
+    FetchSource.prototype.start = function () { if (carryOn) this.watch(); this.open(this.url); };
     FetchSource.prototype.open = function (url) {
       var self = this;
       fetch(url, { signal: this.ctl.signal, credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
@@ -574,7 +762,8 @@
         }
         if (onHeaders && !self.established) onHeaders(r.headers);
         self.progress = 1;
-        var reader = r.body.getReader();
+        var reader = self.reader = r.body.getReader();
+        self.lastByte = Date.now();
         // Each read starts the next without returning it: a returned one would chain
         // every chunk's promise to the last, kept until the stream ends.
         (function next() {
@@ -586,6 +775,7 @@
             if (x.done) { if (!self.carryOn()) self.completed = true; return; }
             self.established = true;
             self.tries = 0;
+            self.lastByte = Date.now();
             if (self.destination) self.destination.write(x.value);
             next();
           }, failed);
@@ -612,8 +802,21 @@
       }, this.tries++ ? 2000 : 0);
       return true;
     };
+    // Ends this connection and carries on with a new one (the reader sees it end).
+    FetchSource.prototype.refresh = function () { if (this.reader) this.reader.cancel().catch(function () {}); };
+    // A connection that's stopped without ending (after a phone slept, or a cell handover
+    // that left it hanging): nothing for 8 s while there's room for more, carry on anew.
+    FetchSource.prototype.watch = function () {
+      var self = this;
+      this.watchdog = setInterval(function () {
+        if (self.established && self.reader && !(self.full && self.full()) && Date.now() - self.lastByte > 8000) {
+          self.lastByte = Date.now();
+          self.refresh();
+        }
+      }, 2000);
+    };
     FetchSource.prototype.resume = function () {};
-    FetchSource.prototype.destroy = function () { this.ctl.abort(); };
+    FetchSource.prototype.destroy = function () { clearInterval(this.watchdog); this.ctl.abort(); };
     return FetchSource;
   }
 
@@ -639,9 +842,17 @@
   // A player whose stream runs ahead (options.buffer): reads no further than buffer + 5 s
   // ahead of what's playing. (FSP catches up after a dead zone, which piled up a minute
   // of sound and slowed the page.) For an MPEG-1 JSMpeg.Player, call it after creating it.
+  // Played by a Steady (above).
   function limitBuffer(player, buffer) {
     if (buffer > 0 && player && player.source) {
-      player.source.full = function () { return buffered(player) > buffer + 5; };
+      // Not while the pictures in hand run short (the decoder started over): reading on,
+      // within the room the sound's buffer has (bufferOptions).
+      player.source.full = function () {
+        var have = buffered(player), v = player.video, fps = (player.options && player.options.fps) || 24;
+        var pictures = v && v.queue ? v.queue.length / fps : Infinity;
+        return have > buffer + 25 || (have > buffer + 5 && pictures > 2);
+      };
+      new Steady(player, buffer);
     }
     return player;
   }
