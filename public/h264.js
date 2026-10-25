@@ -582,6 +582,16 @@
       C.prototype.decode = function () {
         if (this.steady && this.clock == null) return false; // no sound playing yet
         if (this.times && early(this.times[0], this.clock, 0, this.maxWait)) return false;
+        // Behind the sound in a steady player: decode the late ones without drawing them (a
+        // few each time), so the picture catches up at once instead of racing through.
+        if (this.steady && this.times && this.times[0] < this.clock - LATE) {
+          var shown = this.destination, n = 0;
+          this.destination = null;
+          try {
+            while (n < 12 && this.times && this.times.length && this.times[0] < this.clock - LATE && decode.apply(this, arguments)) { this.times.shift(); n++; }
+          } finally { this.destination = shown; }
+          if (n) return true;
+        }
         var got = decode.apply(this, arguments);
         if (got && this.times) this.times.shift();
         return got;
