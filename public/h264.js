@@ -466,7 +466,21 @@
       }
       return Math.max(this.wallclockStartTime - now, 0);
     };
+    // One audio context for the page, kept between players: JSMpeg closed it with each
+    // player, and iOS won't start a new one without a tap, so every seek or quality
+    // change waited for one. dropSound() lets a stuck one go (see Steady.update).
+    W.prototype.destroy = function () {
+      try { this.gain.disconnect(); } catch (e) { /* gone */ }
+      this.context._connections--;
+    };
     W.prototype.cushioned = true;
+  }
+  function dropSound() {
+    var W = window.JSMpeg && window.JSMpeg.AudioOutput && window.JSMpeg.AudioOutput.WebAudio;
+    var ctx = W && W.CachedContext;
+    if (!ctx) return;
+    W.CachedContext = null;
+    try { ctx.close(); } catch (e) { /* closed */ }
   }
 
   // ---------- pictures in step with the sound ----------
@@ -679,6 +693,7 @@
   Steady.prototype.play = function () {
     var film = this.film, ctx = this.player.audioOut.context, self = this;
     this.started = true;
+    this.ctxMovedAt = performance.now() / 1000;
     this.cLast = 0;
     this.next = ctx.currentTime + 0.05;
     this.segs = this.segs.filter(function (s) { return s.pts + s.dur > film; });
@@ -701,6 +716,13 @@
     // The frames stopped a while (the page asleep): carry on from where the sound was.
     if (gap > 1 && this.state === 'playing') this.pause();
     if (this.state === 'paused') this.emit('buffering', 'woke');
+    if (ctx.currentTime !== this.ctxSeen) { this.ctxSeen = ctx.currentTime; this.ctxMovedAt = wall; }
+    // Sound the device says is playing, but its clock hasn't moved (iOS after the phone
+    // was locked): the picture would freeze with it. Stop, and say so: it takes a tap.
+    if (this.state === 'playing' && ctx.state === 'running' && wall - this.ctxMovedAt > 1.2 && gap < 1) {
+      this.pause();
+      this.emit('buffering', 'sound');
+    }
     if (this.state === 'playing') {
       while (this.next - ctx.currentTime < SOUND_AHEAD && a.decode()) { /* scheduled as decoded */ }
       if (ctx.currentTime >= this.next - 0.01 && !(p.source && p.source.completed)) {
@@ -714,7 +736,7 @@
       if (this.film == null) a.decode(); // the first piece: where the stream starts
       if (ctx.state !== 'running' && wall - (this.resumedAt || 0) > 2) { this.resumedAt = wall; ctx.resume().catch(function () {}); }
       var need = this.started && this.why === 'dry' ? this.resumeAt : START; // after a pause or wake: carry straight on
-      if (ctx.state === 'running' && this.film != null && (this.have() >= need || (p.source && p.source.completed))) this.play();
+      if (ctx.state === 'running' && this.why !== 'sound' && this.film != null && (this.have() >= need || (p.source && p.source.completed))) this.play();
     }
     // Less than half the buffer in hand for a minute while data keeps coming: a fresh
     // stream (a new ffmpeg bursts ahead again), at most every 3 minutes.
@@ -882,5 +904,6 @@
     fetchSource: fetchSource, limitBuffer: limitBuffer, buffered: buffered, dataEnd: dataEnd, choose: choose, carNote: carNote, snapshot: snapshot, decodeMatrix: decodeMatrix, CODECS: CODECS,
     // For an MPEG-1 JSMpeg.Player: the same sound handling as createPlayer's.
     soundOptions: function (options) { cushionSound(); syncPictures(); return bufferOptions(options); },
+    dropSound: dropSound,
   };
 })();
