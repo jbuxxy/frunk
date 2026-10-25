@@ -140,9 +140,8 @@
     } else this.behindSince = 0;
     this.pump();
   };
-  // Drop to the newest keyframe (dropping P-frames alone would smear the picture).
-  // To the newest keyframe that's already due, not the newest received: with a buffer,
-  // that one is up to a minute ahead, and the picture would wait there for the sound.
+  // A live stream behind: drop to the newest keyframe that's due (dropping P-frames
+  // alone would smear the picture). A steady player never skips (see pump).
   H264Video.prototype.skipToKey = function () {
     for (var i = this.due() - 1; i > 0; i--) if (this.queue[i].key) { this.queue = this.queue.slice(i); return; }
   };
@@ -205,8 +204,11 @@
     }
     this.backend = new WasmBackend(this);
     this.busy = false;
-    // Carry on from the next keyframe in hand (with a buffer, that's a minute of pictures:
-    // dropping them all froze the picture while the sound played on).
+    this.fromNextKey();
+  };
+  // Carry on from the next keyframe in hand (with a buffer, that's a minute of pictures:
+  // dropping them all froze the picture while the sound played on).
+  H264Video.prototype.fromNextKey = function () {
     var key = -1;
     for (var i = 0; i < this.queue.length; i++) if (this.queue[i].key) { key = i; break; }
     this.queue = key >= 0 ? this.queue.slice(key) : [];
@@ -217,10 +219,7 @@
     this.backend.destroy();
     this.backend = this.backend instanceof WasmBackend ? new WasmBackend(this) : new WebCodecsBackend(this);
     this.busy = false;
-    var key = -1;
-    for (var i = 0; i < this.queue.length; i++) if (this.queue[i].key) { key = i; break; }
-    this.queue = key >= 0 ? this.queue.slice(key) : [];
-    this.waitingForKey = key < 0;
+    this.fromNextKey();
   };
   H264Video.prototype.seek = function () {};
   H264Video.prototype.destroy = function () {
@@ -468,7 +467,7 @@
     };
     // One audio context for the page, kept between players: JSMpeg closed it with each
     // player, and iOS won't start a new one without a tap, so every seek or quality
-    // change waited for one. dropSound() lets a stuck one go (see Steady.update).
+    // change waited for one. dropSound() lets a stuck one go (the app's "Tap to continue").
     W.prototype.destroy = function () {
       try { this.gain.disconnect(); } catch (e) { /* gone */ }
       this.context._connections--;
@@ -542,28 +541,18 @@
     P.updateForStreaming = function () {
       if (this.video) {
         this.video.clock = soundClock(this);
-        this.video.maxWait = (this.options && this.options.maxWait) || MAX_WAIT;
       }
-      if (this.audio) { this.audio.out = this.audioOut; this.audio.jit = this.options && this.options.buffer ? SOUND_AHEAD : 0; }
       return update.apply(this, arguments);
     };
     P.synced = true;
     [J.Decoder.MP2Audio, J.Decoder.MP2AudioWASM].forEach(function (C) {
       if (!C) return;
-      var write = C.prototype.write, decode = C.prototype.decode;
+      var write = C.prototype.write;
       C.prototype.write = function (pts) {
         if (pts != null && this.lastPts != null && pts <= this.lastPts) return; // no sound twice (see H264Video.write)
         if (this.firstPts == null) this.firstPts = pts;
         if (pts != null) this.lastPts = pts;
         return write.apply(this, arguments);
-      };
-      // With a buffer, sound stays compressed until it's nearly due (16 KB a second, not
-      // the 350 KB decoded): a minute in hand costs the car 1 MB, not 23.
-      // Never while JSMpeg has the output off (it's throwing its queue away): sound decoded
-      // then is lost, and with a buffer it would go on to lose all of it.
-      C.prototype.decode = function () {
-        if (this.jit && this.out && (!this.out.enabled || this.out.enqueuedTime > this.jit)) return false;
-        return decode.apply(this, arguments);
       };
     });
     // JSMpeg's own MPEG-1 decoders: one picture per packet, so a list of timestamps.
@@ -588,7 +577,7 @@
           var shown = this.destination, n = 0;
           this.destination = null;
           try {
-            while (n < 12 && this.times && this.times.length && this.times[0] < this.clock - LATE && decode.apply(this, arguments)) { this.times.shift(); n++; }
+            while (n < 3 && this.times && this.times.length && this.times[0] < this.clock - LATE && decode.apply(this, arguments)) { this.times.shift(); n++; }
           } finally { this.destination = shown; }
           if (n) return true;
         }
@@ -621,12 +610,11 @@
     this.film = null; // the time while nothing plays
     this.segs = []; // sound decoded, not yet heard: { pts, dur, buf, src, at }
     this.next = 0; // the audio device's time the next piece starts at
-    this.started = false;
-    this.cRaw = -1; this.cAt = 0; this.cLast = 0;
+    this.cRaw = -1; this.cAt = 0; this.cLast = 0; // the device's clock, last seen moving (see now)
     this.lastUpdate = 0;
     this.lowSince = 0; this.refreshedAt = 0;
     player.steady = this;
-    if (player.video) player.video.steady = true;
+    if (player.video) { player.video.steady = true; player.video.maxWait = Infinity; }
     if (out) out.play = function (rate, left, right) { self.schedule(rate, left, right); };
     player.updateForStreaming = function () { self.update(); };
     this.onHide = function () { if (document.visibilityState === 'hidden') self.pause(); };
@@ -665,8 +653,9 @@
     return x.pts + Math.min(t - x.at, x.dur);
   };
   // Seconds in hand from here (received, not yet heard).
-  Steady.prototype.have = function () {
-    var a = this.player.audio, t = this.time();
+  Steady.prototype.have = function (t) {
+    var a = this.player.audio;
+    if (t === undefined) t = this.time();
     return a && a.lastPts != null && t != null ? Math.max(0, a.lastPts - t) : 0;
   };
   // Seconds of sound scheduled ahead on the device.
@@ -702,8 +691,7 @@
   };
   Steady.prototype.play = function () {
     var film = this.film, ctx = this.player.audioOut.context, self = this;
-    this.started = true;
-    this.ctxMovedAt = performance.now() / 1000;
+    this.cAt = performance.now() / 1000; // the stuck-clock check starts afresh
     this.cLast = 0;
     this.next = ctx.currentTime + 0.05;
     this.segs = this.segs.filter(function (s) { return s.pts + s.dur > film; });
@@ -726,15 +714,17 @@
     // The frames stopped a while (the page asleep): carry on from where the sound was.
     if (gap > 1 && this.state === 'playing') this.pause();
     if (this.state === 'paused') this.emit('buffering', 'woke');
-    if (ctx.currentTime !== this.ctxSeen) { this.ctxSeen = ctx.currentTime; this.ctxMovedAt = wall; }
     // Sound the device says is playing, but its clock hasn't moved (iOS after the phone
     // was locked): the picture would freeze with it. Stop, and say so: it takes a tap.
-    if (this.state === 'playing' && ctx.state === 'running' && wall - this.ctxMovedAt > 1.2 && gap < 1) {
+    if (this.state === 'playing') this.now();
+    if (this.state === 'playing' && ctx.state === 'running' && wall - this.cAt > 1.2 && gap < 1) {
       this.pause();
       this.emit('buffering', 'sound');
     }
     if (this.state === 'playing') {
-      while (this.next - ctx.currentTime < SOUND_AHEAD && a.decode()) { /* scheduled as decoded */ }
+      // A few pieces a frame (each is ~26 ms), more only if it's about to run out: all of
+      // SOUND_AHEAD at once is ~190 decodes, which stalled the picture on a slower car.
+      for (var n = 0; this.next - ctx.currentTime < SOUND_AHEAD && (n < 8 || this.next - ctx.currentTime < 0.3) && a.decode(); n++) { /* scheduled as decoded */ }
       if (ctx.currentTime >= this.next - 0.01 && !(p.source && p.source.completed)) {
         // Ran dry: nothing more to play. Wait for RESUME in hand, then carry on.
         this.film = this.time();
@@ -745,18 +735,21 @@
     if (this.state === 'buffering') {
       if (this.film == null) a.decode(); // the first piece: where the stream starts
       if (ctx.state !== 'running' && wall - (this.resumedAt || 0) > 2) { this.resumedAt = wall; ctx.resume().catch(function () {}); }
-      var need = this.started && this.why === 'dry' ? this.resumeAt : START; // after a pause or wake: carry straight on
+      var need = this.why === 'dry' ? this.resumeAt : START; // after a pause or wake: carry straight on
       if (ctx.state === 'running' && this.why !== 'sound' && this.film != null && (this.have() >= need || (p.source && p.source.completed))) this.play();
     }
+    var t = this.time();
     // Less than half the buffer in hand for a minute while data keeps coming: a fresh
-    // stream (a new ffmpeg bursts ahead again), at most every 3 minutes.
-    if (this.have() < this.buffer / 2 && p.source && p.source.full && !p.source.full()) {
-      this.lowSince = this.lowSince || wall;
-      if (wall - this.lowSince > 60 && wall - this.refreshedAt > 180 && p.source.refresh) { this.refreshedAt = wall; this.lowSince = 0; p.source.refresh(); }
-    } else this.lowSince = 0;
+    // stream (a new ffmpeg bursts ahead again), at most every 3 minutes. Checked each second.
+    if (wall - (this.lowCheckedAt || 0) >= 1) {
+      this.lowCheckedAt = wall;
+      if (this.have(t) < this.buffer / 2 && p.source && p.source.full && !p.source.full()) {
+        this.lowSince = this.lowSince || wall;
+        if (wall - this.lowSince > 60 && wall - this.refreshedAt > 180 && p.source.refresh) { this.refreshedAt = wall; this.lowSince = 0; p.source.refresh(); }
+      } else this.lowSince = 0;
+    }
     if (v) {
-      v.clock = this.time();
-      v.maxWait = Infinity;
+      v.clock = t;
       v.decode();
     }
   };
@@ -856,13 +849,8 @@
   // queue that much sound (plus the cushion), keep it unread, and pictures wait that long.
   function bufferOptions(opts) {
     var buffer = Math.max(0, Number(opts.buffer) || 0);
-    // Sound is decoded only SOUND_AHEAD ahead (the rest waits compressed), so JSMpeg's
-    // queue stays short; going over maxAudioLag makes JSMpeg throw its queue away.
-    opts.maxAudioLag = MAX_AUDIO_LAG + (buffer ? SOUND_AHEAD : 0);
-    // Pictures that far ahead are waited for. Room to spare: after a break, the stream
-    // carried on with bursts on top of what's in hand (and a picture taken for being
-    // overdue is skipped).
-    opts.maxWait = buffer ? buffer + 30 : MAX_WAIT;
+    // A live player's queue limit (a steady one schedules its own sound, see Steady).
+    opts.maxAudioLag = MAX_AUDIO_LAG;
     // The compressed sound in hand: reading stops at buffer + 5 s (limitBuffer), and a
     // buffer that overflows is emptied whole. 128 kbit/s is 16 KB a second; room for 30 s more.
     if (buffer) opts.audioBufferSize = Math.max(opts.audioBufferSize || 0, (buffer + 30) * 16384);
