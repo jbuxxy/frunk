@@ -56,7 +56,7 @@
     }
     return gpu;
   }
-  var TEST_TIER = (/[?&]tier=(new|old)\b/.exec(location.search) || [])[1]; // TEMPORARY: a phone playing as a car
+  var TEST_TIER = (/[?&]tier=(new|old)\b/.exec(location.search) || [])[1]; // "Play like a Tesla" (?tier=): a phone playing as a car
   function carTier() {
     if (TEST_TIER) return TEST_TIER;
     var name = gpuName() || '';
