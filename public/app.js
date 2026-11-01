@@ -393,9 +393,10 @@
     go(site.url);
   }
 
-  // Parked? The car pauses every <video> once it's out of Park, so a silent one, drawn
-  // from a canvas, either plays (parked) or doesn't. Can't tell (not a car, no canvas
-  // stream, no answer in 2 s): taken as parked, so the question is asked as before.
+  // Parked? The car blocks every <video> once it's out of Park, so a silent one, drawn
+  // from a canvas, either moves on (parked) or doesn't, however it's blocked (refused,
+  // paused, or left hanging). Can't tell (not a car, no canvas stream): taken as parked,
+  // so the question is asked as before.
   function parked() {
     if (!isTesla) return Promise.resolve(true);
     return new Promise((resolve) => {
@@ -424,8 +425,8 @@
       } catch {
         return finish(true);
       }
-      video.play().then(() => setTimeout(() => finish(!video.paused), 600), () => finish(false));
-      setTimeout(() => finish(true), 2000);
+      video.play().catch(() => finish(false));
+      setTimeout(() => finish(!video.paused && video.currentTime > 0), 800);
     });
   }
 
