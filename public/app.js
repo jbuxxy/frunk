@@ -388,8 +388,45 @@
       if (kept === "fsp") return go(me.fsp.url);
       if (kept !== "plex") return openPlexPrompt(site);
     }
-    if (wantsFullscreen && !fsPromptShown && asksFullscreen(site)) return openFullscreenPrompt(site);
+    // Asked only while parked: out of Park there's nothing to go fullscreen for.
+    if (wantsFullscreen && !fsPromptShown && asksFullscreen(site)) return parked().then((p) => (p ? openFullscreenPrompt(site) : go(site.url)));
     go(site.url);
+  }
+
+  // Parked? The car pauses every <video> once it's out of Park, so a silent one, drawn
+  // from a canvas, either plays (parked) or doesn't. Can't tell (not a car, no canvas
+  // stream, no answer in 2 s): taken as parked, so the question is asked as before.
+  function parked() {
+    if (!isTesla) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 2;
+      const ctx = canvas.getContext("2d");
+      let n = 0;
+      const draw = setInterval(() => {
+        ctx.fillStyle = n++ % 2 ? "#000" : "#111";
+        ctx.fillRect(0, 0, 2, 2);
+      }, 50);
+      const video = document.createElement("video");
+      let done = false;
+      const finish = (yes) => {
+        if (done) return;
+        done = true;
+        clearInterval(draw);
+        video.pause();
+        video.srcObject = null;
+        resolve(yes);
+      };
+      try {
+        video.muted = true;
+        video.playsInline = true;
+        video.srcObject = canvas.captureStream(20);
+      } catch {
+        return finish(true);
+      }
+      video.play().then(() => setTimeout(() => finish(!video.paused), 600), () => finish(false));
+      setTimeout(() => finish(true), 2000);
+    });
   }
 
   const plexPrompt = $("plexPrompt");
