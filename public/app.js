@@ -370,14 +370,26 @@
   // A Plex tile in the car (when Frunk knows an FSP): offer FSP, whose player keeps going
   // while driving. A remembered choice ("fsp" or "plex", this car only) skips the question.
   const isPlexTile = (site) => isTesla && me.fsp && me.fsp.plexHosts.includes(hostOf(site.url));
+  // Opens a site. FSP, opened while fullscreen, is told so (?fs=1, as from the YouTube
+  // trick): the car doesn't say, and FSP otherwise offers to go fullscreen.
+  function go(url) {
+    if (inFullscreen && me.fsp && hostOf(url) === hostOf(me.fsp.url)) {
+      try {
+        const u = new URL(url);
+        u.searchParams.set("fs", "1");
+        url = u.href;
+      } catch {}
+    }
+    location.assign(url);
+  }
   function launch(site, { plexAsked = false } = {}) {
     if (!plexAsked && isPlexTile(site)) {
       const kept = store.lget("frunk-plex-choice");
-      if (kept === "fsp") return location.assign(me.fsp.url);
+      if (kept === "fsp") return go(me.fsp.url);
       if (kept !== "plex") return openPlexPrompt(site);
     }
     if (wantsFullscreen && !fsPromptShown && asksFullscreen(site)) return openFullscreenPrompt(site);
-    location.assign(site.url);
+    go(site.url);
   }
 
   const plexPrompt = $("plexPrompt");
@@ -390,7 +402,7 @@
   function plexChoice(choice) {
     if ($("plexPromptRemember").checked) store.lset("frunk-plex-choice", choice);
     plexPrompt.close();
-    if (choice === "fsp") location.assign(me.fsp.url);
+    if (choice === "fsp") go(me.fsp.url);
     else launch(plexSite, { plexAsked: true });
   }
   $("plexPromptFsp").onclick = () => plexChoice("fsp");
@@ -407,7 +419,7 @@
   $("fsPromptJust").onclick = () => {
     fsPromptShown = true; // only a choice counts; the X just closes it
     fsPrompt.close();
-    location.assign(fsSite.url);
+    go(fsSite.url);
   };
 
   // ---------- Tile press handling ----------
@@ -1729,7 +1741,7 @@
     if (!busy) showShared();
     // Back from the fullscreen trip started by tapping a tile: open that tile.
     const pending = openAfterFullscreen && sites.find((x) => x.id === openAfterFullscreen);
-    if (pending) return location.assign(pending.url);
+    if (pending) return go(pending.url);
     if (frunk.party) frunk.party.start(me.user);
     const q = new URLSearchParams(location.search);
     if (q.get("signin_error")) {
