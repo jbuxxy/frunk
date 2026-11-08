@@ -1156,7 +1156,56 @@
 
   const fmtDate = (iso) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: new Date(iso).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
 
+  // ---------- Frunk Access: connected apps (in People) ----------
+  function showAccessKey(r) {
+    $("accessKey").hidden = false;
+    $("accessKeyFor").textContent = r.app.name;
+    $("accessKeyValue").value = r.key;
+    $("accessKeyValue").select();
+  }
+  async function renderAccess() {
+    let apps;
+    try { apps = await api("/api/admin/access"); } catch { return; }
+    const list = $("accessList");
+    list.replaceChildren();
+    for (const a of apps) {
+      const r = document.createElement("div");
+      r.className = "person";
+      const text = document.createElement("div");
+      const t = document.createElement("div");
+      t.className = "person-name";
+      t.textContent = a.name;
+      const st = document.createElement("div");
+      st.className = "hint";
+      st.textContent = `${a.origin} · ${a.people} ${a.people === 1 ? "person" : "people"}${a.used ? ` · last used ${fmtDate(a.used)}` : ""}`;
+      text.append(t, st);
+      const acts = document.createElement("div");
+      acts.className = "person-actions";
+      const btn = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = `pill small ${cls}`; b.textContent = label; b.onclick = () => pressed(b, fn); acts.append(b); };
+      btn("New key", "", async () => {
+        if (!confirm(`Make a new key for ${a.name}? The old one stops working, so ${a.name} needs the new one.`)) return;
+        showAccessKey(await api(`/api/admin/access/${a.id}/rekey`, { method: "POST", body: "{}" }));
+      });
+      btn("Remove", "danger", async () => {
+        if (!confirm(`Disconnect ${a.name}? People it already let in keep their accounts there.`)) return;
+        await api(`/api/admin/access/${a.id}`, { method: "DELETE" });
+        renderAccess();
+      });
+      r.append(text, acts);
+      list.append(r);
+    }
+  }
+  $("accessAdd").onclick = () => pressed($("accessAdd"), async () => {
+    const r = await api("/api/admin/access", { method: "POST", body: JSON.stringify({ name: $("accessName").value, address: $("accessAddress").value }) });
+    $("accessName").value = ""; $("accessAddress").value = "";
+    showAccessKey(r);
+    renderAccess();
+  });
+  $("accessKeyCopy").onclick = () => { navigator.clipboard?.writeText($("accessKeyValue").value).then(() => toast("Key copied."), () => {}); };
+
   async function openPeople() {
+    $("accessKey").hidden = true;
+    void renderAccess();
     let data;
     try {
       data = await api("/api/admin/people");

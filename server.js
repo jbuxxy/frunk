@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const net = require("node:net");
 
 const { createAccounts, SESSION_DAYS } = require("./accounts");
+const { createAccess } = require("./access");
 const { createMailer } = require("./mailer");
 const fetcher = require("./fetcher");
 const { createParties } = require("./party");
@@ -583,6 +584,7 @@ ${google ? `<tr><td style="font-size:14px;line-height:1.5;color:#8e939b">${escap
 
 // ---------- Accounts + sessions ----------
 const accounts = createAccounts({ dataDir: DATA_DIR, ownerEmail: process.env.FRUNK_OWNER_EMAIL });
+const access = createAccess({ dataDir: DATA_DIR });
 accounts.ensureOwner(readSites());
 const COOKIE = "frunk_session";
 
@@ -1087,13 +1089,53 @@ on("POST", "/api/admin/send-tile", "admin", async ({ req, res, user }) => {
     if (target.sites.some((s) => s.url === site.url)) result.had.push(label);
     else if (target.sites.length >= 200) result.full.push(label);
     else {
-      const copy = { ...site, id: crypto.randomUUID() };
+      // From an admin: it carries a grant (Frunk Access), whatever the admin's own tile had.
+      const { grant: _own, ...plain } = site;
+      const copy = { ...plain, id: crypto.randomUUID(), grant: accounts.grantStamp(user.id) };
       accounts.addSharedTile(target, copy, { tile: copy.id, name: site.name, from: user.name || user.email, at: Date.now() });
       parties.notify(target.id, { type: "shared" }); // on their screen now, not at their next refresh
       result.sent.push(label);
     }
   }
   return json(res, 200, result);
+});
+
+// ---------- Frunk Access (access.js, docs/frunk-access.md) ----------
+// Other apps ask whether an email may sign in: yes when that person has a tile for the
+// app that an admin gave them. The admin connects each app and gets its key once.
+on("GET", "/api/admin/access", "admin", ({ res }) => {
+  const counts = access.counts(accounts.allUsers());
+  return json(res, 200, access.list().map((a) => ({ ...a, people: counts[a.id] || 0 })));
+});
+on("POST", "/api/admin/access", "admin", async ({ req, res }) => {
+  const { name, address } = (await readBody(req)) || {};
+  const r = access.add(name, address);
+  return r.error ? json(res, 400, { error: r.error }) : json(res, 200, r);
+});
+on("POST", "/api/admin/access/:id/rekey", "admin", ({ res, params }) => {
+  const r = access.rekey(params.id);
+  return r ? json(res, 200, r) : json(res, 404, { error: "No such app." });
+});
+on("PUT", "/api/admin/access/:id", "admin", async ({ req, res, params }) => {
+  const r = access.rename(params.id, ((await readBody(req)) || {}).name);
+  return r ? json(res, 200, r) : json(res, 400, { error: "Give it a name." });
+});
+on("DELETE", "/api/admin/access/:id", "admin", ({ res, params }) => json(res, 200, { ok: access.remove(params.id) }));
+const accessCalls = new Map(); // key hash or IP -> { n, since }
+on("POST", "/api/access/check", "anyone", async ({ req, res }) => {
+  const key = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const who = crypto.createHash("sha256").update(key || clientIp(req)).digest("hex");
+  const c = accessCalls.get(who);
+  if (c && Date.now() - c.since < 60_000 && c.n >= 120) return json(res, 429, { error: "Too many checks." });
+  accessCalls.set(who, c && Date.now() - c.since < 60_000 ? { ...c, n: c.n + 1 } : { n: 1, since: Date.now() });
+  if (accessCalls.size > 5000) accessCalls.clear();
+  const app = access.appForKey(key);
+  if (!app) {
+    await new Promise((r) => setTimeout(r, 500)); // a wrong key learns nothing quickly
+    return json(res, 401, { error: "Unknown app key." });
+  }
+  const { email } = (await readBody(req)) || {};
+  return json(res, 200, access.check(app, email, accounts.allUsers()));
 });
 
 // ---------- Watch Party ----------

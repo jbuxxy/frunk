@@ -1019,3 +1019,9 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
   .party-chat-head h3 { font-size: 18px; }
   .party-chat-form input { min-height: 44px; }
 }
+
+/* Frunk Access: connected apps in People */
+.access-row { flex-wrap: wrap; }
+.access-row input { min-width: 200px; }
+.access-key { margin-top: 12px; padding: 14px; border-radius: 16px; background: rgba(255, 255, 255, 0.05); }
+.access-key input { font-family: ui-monospace, "SF Mono", monospace; font-size: 14px; }

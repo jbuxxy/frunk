@@ -142,12 +142,38 @@ function createAccounts({ dataDir, ownerEmail }) {
     save();
   }
 
+  // A new account's tiles: the default page plus any from the invite. Both come from an
+  // admin, so they carry a grant (Frunk Access: access.js).
   function startingTiles(email, defaultSites) {
     const invite = db.invites.find((i) => i.email === norm(email));
     const extra = invite?.tiles || [];
     const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
     const have = new Set(defaultSites.map((s) => host(s.url)));
-    return [...defaultSites, ...extra.filter((t) => !have.has(host(t.url)))];
+    const by = byEmail(owner)?.id || "admin";
+    return [...defaultSites, ...extra.filter((t) => !have.has(host(t.url)))].map((t) => ({ ...t, grant: grantStamp(by) }));
+  }
+
+  // ---------- Frunk Access grants ----------
+  // A tile an admin gave someone carries grant: { by, at }. It's kept while the tile
+  // still points at the same address (origin); edited elsewhere, or added by the person
+  // themselves, a tile has none. The page can't set one: validSites drops it.
+  const grantStamp = (by) => ({ by, at: new Date().toISOString() });
+  const originOf = (u) => { try { return new URL(u).origin.toLowerCase(); } catch { return null; } };
+  function keepGrants(oldSites, newSites) {
+    const old = new Map(oldSites.map((s) => [s.id, s]));
+    return newSites.map((s) => {
+      const o = old.get(s.id);
+      const { grant: _ignored, ...clean } = s;
+      return o?.grant && originOf(o.url) === originOf(s.url) ? { ...clean, grant: o.grant } : clean;
+    });
+  }
+  // The one-time backfill (tools/access-backfill.js): mark a tile as given by an admin.
+  function grantTile(user, tileId, by) {
+    const t = user.sites.find((s) => s.id === tileId);
+    if (!t || t.grant) return false;
+    t.grant = { ...grantStamp(by), backfill: true };
+    save();
+    return true;
   }
 
   // ---------- Sign-in paths ----------
@@ -267,7 +293,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   }
 
   function setSites(user, sites) {
-    user.sites = sites;
+    user.sites = keepGrants(user.sites || [], sites);
     save();
   }
 
@@ -297,7 +323,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   return {
     ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
-    people, deleteUser, setSites, setName, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles,
+    people, deleteUser, setSites, setName, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles, grantTile, grantStamp,
   };
 }
 

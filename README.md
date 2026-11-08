@@ -108,6 +108,20 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
 
+## Frunk Access: one invite for your other apps
+
+If you self-host other apps behind Google sign-in, Frunk can be their front door. Give
+someone a tile for one of those apps on Frunk (on the default page, in their invite or
+with **Send**), and they can sign in to that app with Google. You don't need a second
+invite.
+- Each app is its own: a tile for your TV app opens only your TV app.
+- Tiles people add themselves never count.
+
+Connect an app under **People → Connected apps** to get its key. The app then asks
+Frunk with one HTTP call, or with the dependency-free client in
+[`clients/frunk-access.js`](clients/frunk-access.js). The full guide is in
+[docs/frunk-access.md](docs/frunk-access.md).
+
 ## Development
 
 Frunk needs Node.js 22 or later. Running it needs no `npm install`; only the

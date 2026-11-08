@@ -393,6 +393,19 @@
       <div class="field-label invite-tiles-label">Start them with these tiles <span class="optional">(added to the default page)</span></div>
       <div class="invite-tiles" id="inviteTiles"></div>
       <p class="hint" id="inviteHint">They can sign in with Google using that email, or open the invite link to set a password.</p>
+      <!-- Frunk Access: your other apps let people in when you've given them that app's tile. -->
+      <div class="field-label">Connected apps <span class="optional">(Frunk Access)</span></div>
+      <p class="hint">A connected app lets someone sign in with Google when you've given them its tile here (on the default page, in their invite, or with Send). Each app is its own: a TV tile opens only TV.</p>
+      <div class="people" id="accessList"></div>
+      <div class="invite-row access-row">
+        <input id="accessName" placeholder="Name, like BuxTV" maxlength="40" autocapitalize="words">
+        <input id="accessAddress" type="url" placeholder="https://tv.example.com" autocapitalize="off" spellcheck="false">
+        <button type="button" class="pill accent" id="accessAdd">Connect</button>
+      </div>
+      <div class="access-key" id="accessKey" hidden>
+        <div class="hint">The app key for <b id="accessKeyFor"></b>. It's shown only now: put it in that app's settings (FRUNK_ACCESS_KEY).</div>
+        <div class="invite-row"><input id="accessKeyValue" readonly spellcheck="false"><button type="button" class="pill" id="accessKeyCopy">Copy</button></div>
+      </div>
       <div class="sheet-actions">
         <span class="spacer"></span>
         <button type="button" class="pill" id="peopleClose" data-close>Close</button>
