@@ -251,21 +251,31 @@
     <form method="dialog" id="signInForm">
       <h2>Sign in</h2>
       <p class="hint" id="signInNote" hidden></p>
-      <button type="button" class="phone-btn" id="phoneSignInBtn">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg>
-        Sign in with your phone
-      </button>
-      <a class="google-btn" id="googleBtn" href="/auth/google" hidden>
-        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
-        Continue with Google
-      </a>
-      <div class="gsi-btn" id="gsiButton" hidden></div>
-      <div class="or" id="orDivider" hidden><span>or</span></div>
-      <label>Email<input name="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
-      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-      <div class="hint error" id="signInError"></div>
-      <!-- Always here; after three wrong passwords it's the obvious next step. -->
-      <button type="button" class="pill forgot-link" id="forgotBtn">Forgot password?</button>
+      <!-- As CoDrive: Google and email on one side; beside them (anything but a phone), the
+           QR code and its code, shown at once, for signing in from a phone with no typing. -->
+      <div class="signin-cols">
+        <div class="signin-main">
+          <a class="google-btn" id="googleBtn" href="/auth/google" hidden>
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
+            Continue with Google
+          </a>
+          <div class="gsi-btn" id="gsiButton" hidden></div>
+          <div class="or" id="orDivider" hidden><span>or</span></div>
+          <label>Email<input name="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+          <div class="hint error" id="signInError"></div>
+          <!-- Always here; after three wrong passwords it's the obvious next step. -->
+          <button type="button" class="pill forgot-link" id="forgotBtn">Forgot password?</button>
+        </div>
+        <aside class="signin-pair" id="signInPair" hidden aria-label="Sign in with your phone">
+          <span class="eyebrow">No keyboard</span>
+          <h3>Sign in with your phone</h3>
+          <div class="qr" id="pairQr"></div>
+          <div class="pair-code" id="pairCode"></div>
+          <p class="hint center">Scan with your phone's camera, sign in there, then tap Approve. Or go to <b id="pairHost"></b> and type the code.</p>
+          <div class="pair-left"><span class="pair-bar"><i id="pairBar"></i></span><span id="pairLeft"></span></div>
+        </aside>
+      </div>
       <div class="sheet-actions">
         <span class="spacer"></span>
         <button type="button" class="pill" id="signInCancel" data-close>Cancel</button>
@@ -322,21 +332,6 @@
     </form>
   </dialog>
 
-  <!-- Car: QR code for signing in with a phone -->
-  <dialog class="sheet narrow" id="pairDialog">
-    <form method="dialog">
-      <h2>Sign in with your phone</h2>
-      <p class="hint">Scan with your phone's camera, sign in there, then tap Approve. Nothing to type on this screen.</p>
-      <div class="qr" id="pairQr"></div>
-      <div class="pair-code" id="pairCode"></div>
-      <p class="hint center">Can't scan? On your phone go to <b id="pairHost"></b> and type this code.</p>
-      <div class="sheet-actions">
-        <button type="button" class="pill text-btn" id="pairOnScreen">Sign in on this screen instead</button>
-        <span class="spacer"></span>
-        <button type="button" class="pill" id="pairCancel" data-close>Cancel</button>
-      </div>
-    </form>
-  </dialog>
 
   <!-- Phone: approve a car sign-in -->
   <dialog class="sheet narrow" id="approveDialog">

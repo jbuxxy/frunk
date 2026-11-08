@@ -131,7 +131,7 @@ test("main screens work in a real browser", { skip }, async (t) => {
     assert.equal(await car.evaluate(() => typeof qrcode), "undefined", "QR library should load only when needed");
     await car.click("#signInBtn");
     await car.waitForSelector("#signInDialog[open]");
-    await car.click("#phoneSignInBtn");
+    // The code is right there beside the form (not a phone): no extra tap.
     await car.waitForSelector("#pairQr svg");
     const code = (await car.$eval("#pairCode", (el) => el.textContent)).replace(" ", "");
 

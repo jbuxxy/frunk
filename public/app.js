@@ -827,15 +827,20 @@
     $("signInForm").reset();
     $("signInNote").textContent = note;
     $("signInNote").hidden = !note;
-    // On the phone that's approving a car, "sign in with your phone" makes no sense.
-    $("phoneSignInBtn").hidden = !!note;
     $("googleBtn").hidden = !me.google;
     $("gsiButton").hidden = true;
     $("orDivider").hidden = !me.google;
     $("signInError").textContent = error;
+    // The QR code and its code beside the form, at once: anywhere but a phone (it's the one
+    // that scans), and not on the phone that's approving a car.
+    const pairHere = !note && !IS_PHONE;
+    $("signInPair").hidden = !pairHere;
+    signInDialog.classList.toggle("with-pair", pairHere);
     signInDialog.showModal();
+    if (pairHere) { pairRenewals = 0; showPairCode(); }
     offerGoogleAccounts();
   }
+  const IS_PHONE = /iPhone|iPod|Android.*Mobile|Mobile.*Firefox|Windows Phone/i.test(navigator.userAgent);
 
   // ---------- Google accounts already on this device ----------
   // Google's script shows a "Continue as <name>" button in the sign-in box and,
@@ -903,12 +908,7 @@
   // The car (and other big touch screens) sign in by phone first, like a
   // streaming device; phones and desktops get the normal sign-in box.
   // (Big-touchscreen check covers the car until Tesla detection is confirmed.)
-  function signInByPhoneFirst() {
-    const coarse = window.matchMedia && matchMedia("(pointer: coarse)").matches;
-    const big = Math.min(screen.width, screen.height) >= 700 && Math.max(screen.width, screen.height) >= 1000;
-    return isTesla || (coarse && big);
-  }
-  $("signInBtn").onclick = () => (signInByPhoneFirst() ? startPairing() : openSignIn());
+  $("signInBtn").onclick = () => openSignIn();
   let misses = 0;
   $("signInForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -1094,23 +1094,16 @@
   };
 
   // ---------- Sign in with your phone ----------
-  // Car side: show a QR code + short code and poll until a phone approves it.
-  const pairDialog = $("pairDialog");
-  let pairTimer = null;
-
+  // Car side: the sign-in box shows a QR code + short code and polls until a phone approves
+  // it, swapping in a fresh code whenever one expires (codes live 10 minutes), like pairing
+  // a streaming device.
+  let pairTimer = null, pairTick = null;
   function stopPairing() {
     clearTimeout(pairTimer);
-    pairTimer = null;
+    clearInterval(pairTick);
+    pairTimer = pairTick = null;
   }
-
-  // Like pairing a streaming device: the car shows a code until a phone approves
-  // it, and swaps in a fresh code whenever one expires (codes live 10 minutes).
   let pairRenewals = 0;
-  async function startPairing() {
-    signInDialog.close();
-    pairRenewals = 0;
-    await showPairCode();
-  }
 
   // Only the car's sign-in screen draws QR codes, so the library loads on first use.
   let qrReady = null;
@@ -1134,16 +1127,26 @@
     try {
       [pair] = await Promise.all([api("/api/pair/start", { method: "POST", body: "{}" }), loadQr()]);
     } catch (err) {
-      if (pairDialog.open) pairDialog.close();
-      return toast(err.message);
+      $("signInPair").hidden = true; // the form still works
+      signInDialog.classList.remove("with-pair");
+      return;
     }
+    if (!signInDialog.open) return;
     const qr = qrcode(0, "M");
     qr.addData(pair.link);
     qr.make();
     $("pairQr").innerHTML = qr.createSvgTag({ cellSize: 6, margin: 3, scalable: true });
     $("pairCode").textContent = fmtCode(pair.code);
     $("pairHost").textContent = `${location.host}/pair`;
-    if (!pairDialog.open) pairDialog.showModal();
+    // How long the code has left.
+    const until = Date.now() + (pair.expiresIn || 600) * 1000;
+    const tick = () => {
+      const left = Math.max(0, until - Date.now());
+      $("pairLeft").textContent = `${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, "0")}`;
+      $("pairBar").style.width = `${(left / ((pair.expiresIn || 600) * 1000)) * 100}%`;
+    };
+    tick();
+    pairTick = setInterval(tick, 1000);
     const poll = async () => {
       let r;
       try {
@@ -1151,28 +1154,24 @@
       } catch {
         r = { status: "pending" }; // network blip: keep waiting
       }
-      if (!pairDialog.open) return;
+      if (!signInDialog.open) return;
       if (r.status === "approved") return location.replace("/");
       if (r.status === "denied") {
-        pairDialog.close();
-        return toast("Sign-in was cancelled on the phone.", 4000);
+        toast("Sign-in was cancelled on the phone.", 4000);
+        return showPairCode();
       }
       if (r.status === "expired") {
         // Keep the screen useful: a new code, up to an hour of waiting.
         if (++pairRenewals <= 6) return showPairCode();
-        pairDialog.close();
-        return toast("Sign-in timed out. Tap Sign in to try again.", 4000);
+        $("signInPair").hidden = true;
+        signInDialog.classList.remove("with-pair");
+        return;
       }
       pairTimer = setTimeout(poll, 2000);
     };
     pairTimer = setTimeout(poll, 2000);
   }
-  $("phoneSignInBtn").onclick = startPairing;
-  $("pairOnScreen").onclick = () => {
-    pairDialog.close();
-    openSignIn();
-  };
-  pairDialog.addEventListener("close", stopPairing);
+  signInDialog.addEventListener("close", stopPairing);
 
   // Phone side: approve a code (from the QR link, or typed in).
   const approveDialog = $("approveDialog");

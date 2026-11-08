@@ -1064,3 +1064,19 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 /* Forgot password: a quiet link, until three wrong passwords make it the next step. */
 .forgot-link { background: none; min-height: 44px; padding: 0 12px; font-size: 17px; color: var(--muted); align-self: center; margin: 4px auto 0; display: flex; }
 .forgot-link.stand-out { background: var(--tile); color: inherit; width: 100%; justify-content: center; box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* Sign in, as CoDrive: the form, and beside it (not on phones) the QR code and its code. */
+.signin-main { display: flex; flex-direction: column; gap: 0; }
+.signin-pair { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px; border-radius: 22px; background: var(--tile); }
+.signin-pair[hidden] { display: none; }
+.signin-pair .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.signin-pair h3 { margin: 2px 0 6px; font-size: 20px; }
+.signin-pair .qr { width: 220px; height: 220px; margin: 6px auto 8px; }
+.signin-pair .pair-code { font-size: 38px; margin: 2px 0 6px; }
+.signin-pair .hint { font-size: 14px; margin: 0; }
+.pair-left { width: 100%; display: flex; align-items: center; gap: 10px; margin-top: 10px; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+.pair-bar { flex: 1; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.pair-bar i { display: block; height: 100%; background: var(--muted); transition: width 1s linear; }
+dialog.sheet.narrow.with-pair { width: min(880px, calc(100vw - 32px)); }
+.with-pair .signin-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); gap: 24px; align-items: start; }
+@media (max-width: 700px) { .with-pair .signin-cols { grid-template-columns: 1fr; } .with-pair .signin-pair { order: -1; } }
