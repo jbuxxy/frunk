@@ -1117,21 +1117,6 @@
   const peopleDialog = $("peopleDialog");
   $("peopleBtn").onclick = () => { accountDialog.close(); pickedTiles.clear(); renderInviteTiles(); openPeople(); };
 
-  // Send the link yourself (text, iMessage, your own email) via the phone's share
-  // sheet: a message from someone they know never lands in spam.
-  async function shareInvite(i) {
-    const msg = `I set you up on Frunk, the big-button launcher I use in the car. Join here: ${i.link}`;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: "Join me on Frunk", text: msg });
-        return;
-      } catch (err) {
-        if (err.name === "AbortError") return;
-      }
-    }
-    return copyText(msg, "Invite message copied: paste it into a text or email", "Copy this and send it:");
-  }
-
   // Emailed if the server could send it; otherwise copy the link to share by hand.
   function deliverInvite(inv) {
     if (inv.emailed) toast(`Invite emailed to ${inv.email}`, 4000);
@@ -1142,6 +1127,16 @@
   }
 
   const copyLink = (link) => copyText(link, "Invite link copied", "Copy this invite link:");
+
+  // Frunk's own address, for anyone already invited (one for everyone, not per invite).
+  const appUrl = () => `${location.origin}/`;
+  $("shareApp").onclick = async () => {
+    if (navigator.share) {
+      try { await navigator.share({ title: "Frunk", url: appUrl() }); return; } catch (err) { if (err.name === "AbortError") return; }
+    }
+    copyText(appUrl(), "Link copied", "Copy Frunk's address:");
+  };
+  $("copyApp").onclick = () => copyText(appUrl(), "Link copied", "Copy Frunk's address:");
 
   // Copies text and toasts okMsg; true if it reached the clipboard. Without
   // clipboard access, shows it in a prompt to copy by hand.
@@ -1292,8 +1287,6 @@
           toast(`Emailed ${i.email} again`);
           return true;
         }, "Sent ✓"]] : []),
-        ["Share", "", () => shareInvite(i), "Copied ✓"],
-        ["Copy link", "", () => copyLink(i.link), "Copied ✓"],
         ["Cancel", "danger", async () => {
           await api(`/api/admin/invites/${i.token}`, { method: "DELETE" });
           openPeople();

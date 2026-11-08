@@ -1029,3 +1029,7 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 .invite-section { margin-top: 22px; padding-top: 18px; border-top: 2px solid var(--line); }
 .invite-section .invite-tiles-label, .invite-section .hint { text-align: center; }
 .invite-section .invite-tiles { grid-template-columns: repeat(auto-fit, minmax(120px, 150px)); justify-content: center; }
+.invite-section .share-site { margin-top: 14px; text-align: center; }
+.invite-section .share-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+.invite-section .share-site { margin-top: 14px; text-align: center; }
+.invite-section .share-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
