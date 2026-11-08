@@ -71,6 +71,11 @@ the browser into fullscreen with one tap.
   guest of that one party) and can remove anyone. A guest who closes the page and
   comes back rejoins as the same guest. New chat messages chime and show a banner
   while the party is minimized.
+- **Frunk Access.** Frunk can be the front door for your other self-hosted apps.
+  Give someone a tile for one of them (on the default page, in their invite or
+  with **Send**), and they can sign in to that app with Google, with no second
+  invite. Each app is its own grant, and tiles people add themselves never count.
+  See [docs/frunk-access.md](docs/frunk-access.md).
 - **No dependencies.** A single Node.js server with no npm packages, and a
   vanilla JS front end.
 
@@ -117,7 +122,7 @@ invite.
 - Each app is its own: a tile for your TV app opens only your TV app.
 - Tiles people add themselves never count.
 
-Connect an app under **People → Connected apps** to get its key. The app then asks
+Add an app under **People → App access** to get its key. The app then asks
 Frunk with one HTTP call, or with the dependency-free client in
 [`clients/frunk-access.js`](clients/frunk-access.js). The full guide is in
 [docs/frunk-access.md](docs/frunk-access.md).
@@ -152,6 +157,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `accounts.js` | Users, invites and sessions, stored in `DATA_DIR/accounts.json` |
 | `party.js` | Watch Party rooms: members, what's playing and where, who may control it (in memory) |
 | `apps.js` | Apps a Watch Party plays from (Plex, Audiobookshelf), on the servers named in the environment, and the stream proxy |
+| `access.js` | Frunk Access: apps added under People → App access, their keys (hashed) and the check |
+| `clients/frunk-access.js` | The dependency-free client other apps copy in to ask Frunk |
 | `fetcher.js` | Outbound fetches for user-supplied URLs, with private-network blocking |
 | `mailer.js` | Minimal SMTP client for invite emails |
 | `public/` | The launcher page (`index.html`, `app.js`, `style.css`) |
@@ -167,6 +174,15 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | `test/` | Unit, API and browser tests |
 
 ## Security notes
+
+**Frunk Access**
+- App keys are 32 random bytes, shown once. Only their SHA-256 is stored, and
+  they're compared in constant time. A wrong key waits half a second before its
+  401, and each key may make 120 checks a minute.
+- A tile's grant is set only by the server, when an admin's tile reaches someone
+  (default page, invite, Send). The page can't set one: saved tiles are rebuilt
+  without it, and a grant survives only while the tile keeps the same address.
+- The check answers only yes or no and the person's display name.
 
 **Passwords and sessions**
 - Passwords are hashed with scrypt (N=2^14, r=8, p=5) and a per-user salt.

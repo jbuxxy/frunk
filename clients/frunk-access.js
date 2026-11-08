@@ -7,7 +7,7 @@
 //   if (await frunk.allows(googleEmail)) { /* create their account */ }
 //
 // Answers are cached briefly. If Frunk can't be reached, or isn't set up, the answer is
-// no (fails closed). The key comes from Frunk: People, Connected apps. See
+// no (fails closed). The key comes from Frunk: People, App access. See
 // docs/frunk-access.md in the Frunk repository.
 const fs = require("node:fs");
 
