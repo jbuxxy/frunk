@@ -486,13 +486,14 @@ function requestOrigin(req) {
 }
 
 // Applied to every response.
+const { describe: describeDevice, ACCEPT_CH } = require("./device-info");
 const SECURITY_HEADERS = {
   "content-security-policy": [
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client", // WebAssembly: the car player's decoder
     "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style", // Google's button injects inline styles
     "font-src 'self'",
-    "img-src 'self' data:",
+    "img-src 'self' data: https://lh3.googleusercontent.com", // Google profile photos
     `connect-src 'self' https://accounts.google.com/gsi/ https://test-streams.mux.dev${FSP_ORIGIN ? ` ${FSP_ORIGIN}` : ""}`, // Watch Party test stream; FSP: car streams (tickets)
     "media-src 'self' blob: https://test-streams.mux.dev", // blob: for hls.js (MediaSource)
     "frame-src https://accounts.google.com/gsi/",
@@ -502,6 +503,7 @@ const SECURITY_HEADERS = {
   ].join("; "),
   "x-content-type-options": "nosniff",
   "referrer-policy": "strict-origin-when-cross-origin",
+  "accept-ch": ACCEPT_CH, // the phone's model and system version, for Signed-in devices
 };
 // For images served from our origin (some fetched from other sites): an SVG
 // opened directly must not be able to run scripts here.
@@ -633,12 +635,15 @@ function setCookie(res, req, name, value, maxAgeSec) {
     `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`]);
 }
 
-function startSession(res, req, user) {
-  setCookie(res, req, COOKIE, accounts.createSession(user.id), SESSION_DAYS * 86400);
+// The address as people know it ("::ffff:1.2.3.4" -> "1.2.3.4").
+const plainIp = (req) => String(clientIp(req) || "").replace(/^::ffff:/, "");
+// how: "google", "password", "invite" or "phone" (shown under Signed-in devices).
+function startSession(res, req, user, how) {
+  setCookie(res, req, COOKIE, accounts.createSession(user.id, { device: describeDevice(req), ip: plainIp(req), how }), SESSION_DAYS * 86400);
 }
 
 function currentUser(req) {
-  return accounts.userForSession(cookies(req)[COOKIE]);
+  return accounts.userForSession(cookies(req)[COOKIE], plainIp(req), () => describeDevice(req));
 }
 
 // Per-IP attempt counts over a 15-minute window: password failures (max 10)
@@ -745,7 +750,7 @@ async function googleCallback(req, res, params) {
   const result = accounts.signInWithGoogle(googleUser(claims), readSites());
   if (result.error) return fail(result.code, `${claims.email}: ${result.error}`);
   console.log(`Google sign-in: ${result.user.email}`);
-  startSession(res, req, result.user);
+  startSession(res, req, result.user, "google");
   redirect(res, "/");
 }
 
@@ -756,6 +761,7 @@ const googleUser = (claims) => ({
   email: claims.email,
   emailVerified: claims.email_verified === true || claims.email_verified === "true",
   name: claims.name,
+  picture: claims.picture,
 });
 
 // ---------- Google One Tap (ID token posted by Google's script) ----------
@@ -845,7 +851,7 @@ function on(method, pattern, access, handler) {
   routes.push({ method, re, keys, access, handler });
 }
 
-const publicUser = (user) => ({ name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null, password: !!user.password });
+const publicUser = (user) => ({ name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null, password: !!user.password, picture: user.picture || null });
 // Tiles sent to this person that they haven't acknowledged yet, minus any
 // they've already removed from their page.
 const sharedWith = (user) => (user.sharedTiles || [])
@@ -899,7 +905,7 @@ on("POST", "/api/google/onetap", "anyone", async ({ req, res }) => {
   const result = accounts.signInWithGoogle(googleUser(claims), readSites());
   if (result.error) return json(res, 403, { error: result.error });
   console.log(`Google One Tap sign-in: ${result.user.email}`);
-  startSession(res, req, result.user);
+  startSession(res, req, result.user, "google");
   return json(res, 200, { ok: true });
 });
 on("POST", "/api/login", "anyone", async ({ req, res }) => {
@@ -911,7 +917,7 @@ on("POST", "/api/login", "anyone", async ({ req, res }) => {
     noteAttempt(failures, ip);
     return json(res, 401, { error: "Wrong email or password." });
   }
-  startSession(res, req, found);
+  startSession(res, req, found, "password");
   return json(res, 200, { ok: true });
 });
 on("POST", "/api/logout", "anyone", ({ req, res }) => {
@@ -928,7 +934,7 @@ on("POST", "/api/signup", "anyone", async ({ req, res }) => {
   const { token, name, password, avatarColor } = (await readBody(req)) || {};
   const result = await accounts.acceptInvite(String(token || ""), { name, password: String(password || ""), avatarColor }, readSites());
   if (result.error) return json(res, 400, { error: result.error });
-  startSession(res, req, result.user);
+  startSession(res, req, result.user, "invite");
   return json(res, 200, { ok: true });
 });
 // Checked again whenever Frunk comes back on screen, so a tile sent meanwhile shows up.
@@ -946,6 +952,10 @@ on("PUT", "/api/me/password", "user", async ({ req, res, user }) => {
   if (r.wrong) noteAttempt(failures, ip);
   return r.error ? json(res, 400, { error: r.error }) : json(res, 200, { ok: true });
 });
+// Where they're signed in; sign one out, or every other one.
+on("GET", "/api/me/sessions", "user", ({ req, res, user }) => json(res, 200, { sessions: accounts.sessionsOf(user.id, cookies(req)[COOKIE]) }));
+on("DELETE", "/api/me/sessions", "user", ({ req, res, user }) => { accounts.endOtherSessions(user.id, cookies(req)[COOKIE]); return json(res, 200, { ok: true }); });
+on("DELETE", "/api/me/sessions/:id", "user", ({ res, params, user }) => (accounts.endSessionById(user.id, params.id) ? json(res, 200, { ok: true }) : json(res, 404, { error: "Already signed out." })));
 on("PUT", "/api/me", "user", async ({ req, res, user }) => {
   const body = (await readBody(req)) || {};
   if ("name" in body && !accounts.setName(user, body.name)) return json(res, 400, { error: "Enter a name." });
@@ -1050,7 +1060,7 @@ on("GET", "/api/pair/poll/:id", "anyone", ({ req, res, params: { id } }) => {
     pairs.delete(id);
     const approver = accounts.allUsers().find((u) => u.id === p.userId);
     if (!approver) return json(res, 200, { status: "expired" });
-    startSession(res, req, approver);
+    startSession(res, req, approver, "phone");
     console.log(`Phone sign-in: ${approver.email}`);
     return json(res, 200, { status: "approved" });
   }
@@ -1076,8 +1086,11 @@ async function sendInvite(req, res, user, invite) {
   const emailError = await emailInvite(invite, withLink.link, user);
   return json(res, 200, { ...withLink, emailed: !emailError, emailError: emailError || undefined });
 }
-on("GET", "/api/admin/people", "admin", ({ req, res }) => {
+on("GET", "/api/admin/people", "admin", ({ req, res, url, user }) => {
   const p = accounts.people();
+  // ?tile=<one of the admin's tiles>: who already has it (Send shows them checked).
+  const site = user.sites.find((s) => s.id === url.searchParams.get("tile"));
+  if (site) for (const u of p.users) u.has = !!userById(u.id)?.sites.some((s) => s.url === site.url);
   return json(res, 200, { ...p, invites: p.invites.map((i) => inviteLink(req, i)), email: !!mailer });
 });
 on("POST", "/api/admin/invites", "admin", async ({ req, res, user }) => {

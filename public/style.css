@@ -70,7 +70,7 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2
 .pill:disabled { opacity: .55; cursor: default; }
 .pill.done, .badge-pill.joined { background: rgba(52, 199, 89, .16); color: var(--green); }
 .icon-btn {
-  width: 56px; height: 56px; border-radius: 50%; border: 0;
+  width: 56px; height: 56px; border-radius: 50%; border: 0; flex: none; aspect-ratio: 1;
   display: grid; place-items: center; font-size: 26px;
   background: var(--tile);
 }
@@ -262,6 +262,8 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 
 /* ---------- Accounts ---------- */
 .icon-btn.avatar { font-size: 22px; font-weight: 700; background: var(--accent); color: #fff; }
+/* Their Google photo, when they have one, instead of the initial. */
+.has-photo { background-size: cover !important; background-position: center !important; color: transparent !important; }
 
 .google-btn {
   display: flex; align-items: center; justify-content: center; gap: 14px;
@@ -893,6 +895,21 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 .party.mini .party-talking { top: 8px; font-size: 14px; padding: 4px 12px 4px 4px; }
 .party.mini .party-talking .party-dot { width: 24px; height: 24px; font-size: 12px; }
 
+/* A narrower window (the car's browser in drive mode, a small laptop): a tighter bar, so
+   nothing squeezes (the round buttons stay round). */
+.pill { white-space: nowrap; }
+@media (max-width: 1100px) and (min-width: 641px) {
+  .bar { grid-template-columns: auto auto 1fr; gap: 16px; }
+  .brand { font-size: 24px; gap: 10px; }
+  .brand img { width: 34px; height: 34px; }
+  .clock { font-size: 22px; }
+  .actions { gap: 8px; min-width: 0; }
+  .actions .pill { min-height: 50px; padding: 0 18px; font-size: 17px; gap: 8px; }
+  .actions .icon-btn { width: 50px; height: 50px; font-size: 22px; }
+  .actions .label-long { display: none; }
+  .actions .label-short { display: inline; }
+}
+
 /* ---------- Phones ---------- */
 .label-short, .party-more { display: none; }
 @media (max-width: 640px) {
@@ -1033,3 +1050,14 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 .invite-section .share-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
 .invite-section .share-site { margin-top: 14px; text-align: center; }
 .invite-section .share-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+/* Signed-in devices */
+.device-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, 0.04); margin-bottom: 8px; }
+.device-row.current { outline: 2px solid var(--line); }
+.device-icon { font-size: 24px; flex: none; width: 36px; text-align: center; }
+.device-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.device-text b { font-size: 17px; }
+.device-text .hint { margin: 0; font-size: 14px; }
+#devicesOthers { display: flex; justify-content: center; margin-top: 12px; }
+/* Send: someone who already has the tile (checked, green, can't be picked). */
+.send-person.has-it { opacity: .7; border-color: transparent; }
+.send-person.has-it .send-check { background: var(--green); border-color: var(--green); }

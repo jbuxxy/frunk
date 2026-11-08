@@ -177,7 +177,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   }
 
   // ---------- Sign-in paths ----------
-  function signInWithGoogle({ sub, email, emailVerified, name }, defaultSites) {
+  function signInWithGoogle({ sub, email, emailVerified, name, picture }, defaultSites) {
     if (!emailVerified) return { error: "Your Google email isn't verified.", code: "unverified" };
     let user = db.users.find((u) => u.google === sub) || byEmail(email);
     if (!user) {
@@ -188,6 +188,9 @@ function createAccounts({ dataDir, ownerEmail }) {
     // Accounts made before their first Google sign-in (e.g. the owner) only have the
     // email's first part as a name; use the real one from Google.
     if (name && user.name === user.email.split("@")[0]) { user.name = String(name).trim().slice(0, 60); save(); }
+    // Their Google profile photo (the account circle), kept current at each Google sign-in.
+    const pic = /^https:\/\/lh3\.googleusercontent\.com\/[\w\-./=?&%]+$/.test(String(picture || "")) ? String(picture).slice(0, 500) : "";
+    if (pic && user.picture !== pic) { user.picture = pic; save(); }
     return { user };
   }
 
@@ -227,18 +230,45 @@ function createAccounts({ dataDir, ownerEmail }) {
   }
 
   // ---------- Sessions ----------
-  function createSession(userId) {
+  // info: { device: { kind, name, os, browser } (device-info.js), ip, how }, for "where
+  // you're signed in".
+  function createSession(userId, info = {}) {
     const token = crypto.randomBytes(32).toString("base64url");
-    db.sessions[sha(token)] = { userId, expires: Date.now() + SESSION_DAYS * 86_400_000 };
+    db.sessions[sha(token)] = { ...info, userId, expires: Date.now() + SESSION_DAYS * 86_400_000, created: Date.now(), seen: Date.now() };
     for (const [k, s] of Object.entries(db.sessions)) if (s.expires < Date.now()) delete db.sessions[k];
     save();
     return token;
   }
-  function userForSession(token) {
+  // ip, device(): when and from where it was last used (at most hourly), and what device
+  // it is for a sign-in from before devices were noted.
+  function userForSession(token, ip, device) {
     if (!token) return null;
     const s = db.sessions[sha(token)];
     if (!s || s.expires < Date.now()) return null;
+    let touched = false;
+    if (!s.device && device) { s.device = device(); touched = true; }
+    if (Date.now() - (s.seen || 0) > 3600_000 || (ip && s.ip !== ip)) { s.seen = Date.now(); if (ip) s.ip = ip; touched = true; }
+    if (touched) save();
     return byId(s.userId) || null;
+  }
+  // Where they're signed in, most recently used first; id: a short piece of the hash.
+  const sessionsOf = (userId, currentToken) => Object.entries(db.sessions).filter(([, s]) => s.userId === userId && s.expires >= Date.now())
+    .map(([hash, s]) => ({
+      id: hash.slice(0, 16), device: s.device || null, how: s.how || null, ip: s.ip || null,
+      created: s.created || null, seen: s.seen || null, current: !!currentToken && hash === sha(currentToken),
+    }))
+    .sort((a, b) => b.current - a.current || (b.seen || 0) - (a.seen || 0));
+  function endSessionById(userId, id) {
+    const hit = Object.entries(db.sessions).find(([hash, s]) => s.userId === userId && hash.slice(0, 16) === id);
+    if (!hit) return false;
+    delete db.sessions[hit[0]];
+    save();
+    return true;
+  }
+  function endOtherSessions(userId, currentToken) {
+    const keep = currentToken ? sha(currentToken) : null;
+    for (const [k, s] of Object.entries(db.sessions)) if (s.userId === userId && k !== keep) delete db.sessions[k];
+    save();
   }
   // Their own password, for accounts that sign in with an email and password (made from
   // an invite link). The current one first; every other device they're signed in on is
@@ -340,7 +370,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   return {
     ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
-    people, deleteUser, setSites, setName, changePassword, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles, grantTile, grantStamp,
+    people, deleteUser, setSites, setName, changePassword, sessionsOf, endSessionById, endOtherSessions, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles, grantTile, grantStamp,
   };
 }
 

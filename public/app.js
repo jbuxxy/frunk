@@ -733,8 +733,10 @@
   const AVATAR_DEFAULT = PALETTE[0];
   const avatarColor = () => (me.user && me.user.avatarColor) || AVATAR_DEFAULT;
 
-  function paintAvatar(el, color, name = me.user && (me.user.name || me.user.email)) {
-    el.style.background = color;
+  // photo: their Google profile photo, shown instead of the initial (account circles only).
+  function paintAvatar(el, color, name = me.user && (me.user.name || me.user.email), photo = null) {
+    el.style.background = photo ? `${color} url("${photo.replace(/"/g, "")}")` : color;
+    el.classList.toggle("has-photo", !!photo);
     el.style.color = luminance(color) > 0.6 ? "#111" : "#fff";
     el.textContent = String(name || "?").trim().charAt(0).toUpperCase() || "?";
   }
@@ -805,7 +807,7 @@
       me.user = await api("/api/me", { method: "PUT", body: JSON.stringify({ avatarColor: color === AVATAR_DEFAULT ? null : color }) });
       avatarDialog.close();
       renderAccount();
-      paintAvatar($("accountAvatar"), avatarColor());
+      paintAvatar($("accountAvatar"), avatarColor(), undefined, me.user.picture);
     } catch (err) {
       toast(`Couldn't save: ${err.message}`);
     }
@@ -817,7 +819,7 @@
     $("signInBtn").hidden = !!u;
     $("accountBtn").hidden = !u;
     $("editBtn").hidden = !u;
-    if (u) paintAvatar($("accountBtn"), avatarColor());
+    if (u) paintAvatar($("accountBtn"), avatarColor(), undefined, u.picture);
   }
 
   const signInDialog = $("signInDialog");
@@ -926,7 +928,7 @@
     $("peopleBtn").hidden = !me.user.admin;
     $("passwordBtn").hidden = !me.user.password;
     $("appVersion").textContent = me.version ? `Version ${me.version}${me.build ? ` · build ${me.build}` : ""}` : "";
-    paintAvatar($("accountAvatar"), avatarColor());
+    paintAvatar($("accountAvatar"), avatarColor(), undefined, me.user.picture);
     accountDialog.showModal();
   };
   $("accountAvatar").onclick = () => openAvatarPicker();
@@ -942,6 +944,54 @@
       toast(err.message);
     }
   };
+  // Where they're signed in: each browser, phone and car, what it is, how and when it
+  // signed in, when it was last used and from what network. Sign one out, or all others.
+  const HOW = { google: "with Google", password: "with a password", invite: "from an invite link", phone: "with a phone" };
+  const KIND = { car: "🚗", phone: "📱", tablet: "📱", computer: "💻" };
+  async function loadDevices() {
+    const list = $("devicesList");
+    const ago = (t) => {
+      const m = Math.round((Date.now() - t) / 60_000);
+      return m < 2 ? "just now" : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+    };
+    const day = (t) => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: new Date(t).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+    const line = (...parts) => parts.filter(Boolean).join(" · ");
+    try {
+      const { sessions } = await api("/api/me/sessions");
+      const here = sessions.find((s) => s.current);
+      list.replaceChildren(...sessions.map((s) => {
+        const d = s.device;
+        const row = document.createElement("div");
+        row.className = "person device-row" + (s.current ? " current" : "");
+        const icon = Object.assign(document.createElement("span"), { className: "device-icon", textContent: d ? KIND[d.kind] || "💻" : "💻" });
+        const text = document.createElement("div");
+        text.className = "device-text";
+        text.append(Object.assign(document.createElement("b"), { textContent: d ? line(d.name, d.browser) : "A browser" }));
+        for (const t of [
+          line(s.current && "This one", d?.os),
+          s.created && `Signed in ${s.how ? `${HOW[s.how]} ` : ""}${day(s.created)}`,
+          line(!s.current && s.seen && `last used ${ago(s.seen)}`, s.ip && (!s.current && here?.ip === s.ip ? "same network as this one" : `from ${s.ip}`)),
+        ]) if (t) text.append(Object.assign(document.createElement("span"), { className: "hint", textContent: t }));
+        row.append(icon, text);
+        if (!s.current) {
+          const b = Object.assign(document.createElement("button"), { type: "button", className: "pill", textContent: "Sign out" });
+          b.onclick = async () => { b.disabled = true; await api(`/api/me/sessions/${s.id}`, { method: "DELETE" }).catch((e) => toast(e.message)); loadDevices(); };
+          row.append(b);
+        }
+        return row;
+      }));
+      $("devicesOthers").hidden = sessions.length < 2;
+    } catch (err) {
+      list.textContent = err.message;
+    }
+  }
+  $("devicesBtn").onclick = () => { accountDialog.close(); $("devicesList").textContent = "Loading…"; $("devicesDialog").showModal(); loadDevices(); };
+  $("devicesOthersBtn").onclick = async () => {
+    if (!confirm("Sign out every other browser, phone and car?")) return;
+    await api("/api/me/sessions", { method: "DELETE" }).catch((e) => toast(e.message));
+    loadDevices();
+  };
+
   // Their own password (accounts that sign in with an email and password; Google ones
   // have none). Other devices are signed out.
   $("passwordBtn").onclick = () => {
@@ -1406,7 +1456,7 @@
     if (!site) return;
     let data;
     try {
-      data = await api("/api/admin/people");
+      data = await api(`/api/admin/people?tile=${encodeURIComponent(id)}`);
     } catch (err) {
       return toast(err.message);
     }
@@ -1420,6 +1470,13 @@
     const list = $("sendPeople");
     list.replaceChildren();
     for (const u of others) {
+      // Someone who already has it: checked, and nothing to send.
+      if (u.has) {
+        const had = personToggle({ name: [u.name || u.email], hint: `${u.email} · has it`, pressed: true, disabled: true, onClick: () => {} });
+        had.classList.add("has-it");
+        list.append(had);
+        continue;
+      }
       const b = personToggle({
         name: [u.name || u.email], hint: u.email, pressed: false,
         onClick: () => {

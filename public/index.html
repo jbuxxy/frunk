@@ -272,6 +272,21 @@
     </form>
   </dialog>
 
+  <!-- Where you're signed in -->
+  <dialog class="sheet narrow" id="devicesDialog">
+    <form method="dialog">
+      <h2>Signed-in devices</h2>
+      <div class="people" id="devicesList"></div>
+      <div class="share-actions" id="devicesOthers" hidden>
+        <button type="button" class="pill danger" id="devicesOthersBtn">Sign out everywhere else</button>
+      </div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" data-close>Close</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Your password: change it, or add one to a Google account -->
   <dialog class="sheet narrow" id="passwordDialog">
     <form method="dialog" id="passwordForm">
@@ -370,6 +385,7 @@
       </div>
       <div class="menu">
         <button type="button" class="pill" id="renameBtn">Edit name</button>
+        <button type="button" class="pill" id="devicesBtn">Signed-in devices</button>
         <button type="button" class="pill" id="passwordBtn" hidden>Change password</button>
         <button type="button" class="pill" id="appsBtn" hidden>Connected apps</button>
         <button type="button" class="pill" id="editDefaultBtn" hidden>Edit public page</button>
