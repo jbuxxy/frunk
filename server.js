@@ -247,6 +247,7 @@ async function logoOptions(name, url, allowPrivate) {
       seen.add(src);
       if (previewable.size > 500) previewable.clear();
       previewable.set(src, allowPrivate);
+      previewCache.delete(`offered ${allowPrivate ? "private" : "public"} ${src}`); // the picture as it is now
       options.push({ kind: "image", src, preview: `/api/preview?u=${encodeURIComponent(src)}` });
     }
   } catch {}
@@ -254,13 +255,22 @@ async function logoOptions(name, url, allowPrivate) {
   return { options, auto: artFor({ name, url }) || null };
 }
 
+// Separate cache entries, so a private-network icon never reaches an untrusted tile.
+const iconKey = (site, allowPrivate) => crypto.createHash("sha1").update(`${allowPrivate ? "" : "public:"}${site.icon || site.url}`).digest("hex");
+const ICON_FRESH_MS = 24 * 3600_000; // a site that changes its icon shows the new one within a day
+
 async function getIcon(site, allowPrivate) {
-  // Separate cache entries, so a private-network icon never reaches an untrusted tile.
-  const key = crypto.createHash("sha1").update(`${allowPrivate ? "" : "public:"}${site.icon || site.url}`).digest("hex");
+  const key = iconKey(site, allowPrivate);
   const file = path.join(ICON_DIR, key);
   try {
     const meta = JSON.parse(fs.readFileSync(`${file}.json`, "utf8"));
-    return { type: meta.type, buf: fs.readFileSync(file) };
+    const buf = fs.readFileSync(file);
+    // Old: fetch it again in the background (this answer stays the cached one; the new
+    // file's stamp makes pages ask again).
+    if (Date.now() - fs.statSync(file).mtimeMs > ICON_FRESH_MS && !iconLookups.has(key)) {
+      iconLookups.set(key, findIcon(site, allowPrivate, key, file, true).catch(() => null).finally(() => iconLookups.delete(key)));
+    }
+    return { type: meta.type, buf };
   } catch {}
   if (Date.now() - (iconMisses.get(key) || 0) < 10 * 60_000) return null;
   if (!iconLookups.has(key)) {
@@ -269,7 +279,16 @@ async function getIcon(site, allowPrivate) {
   return iconLookups.get(key);
 }
 
-async function findIcon(site, allowPrivate, key, file) {
+// A tile just saved from its edit box: its icon is fetched again now, so a changed
+// icon shows at once (same address, new picture).
+async function refreshIcon(site, allowPrivate) {
+  const key = iconKey(site, allowPrivate);
+  iconMisses.delete(key);
+  await (iconLookups.get(key) || Promise.resolve()).catch(() => {});
+  return findIcon(site, allowPrivate, key, path.join(ICON_DIR, key), true).catch(() => null);
+}
+
+async function findIcon(site, allowPrivate, key, file, keepOnMiss = false) {
   let hit = null;
   for (const url of site.icon ? [site.icon] : await iconCandidates(site.url, allowPrivate)) {
     hit = await fetchImage(url, allowPrivate).catch(() => null);
@@ -280,7 +299,7 @@ async function findIcon(site, allowPrivate, key, file) {
     fs.writeFileSync(file, hit.buf);
     fs.writeFileSync(`${file}.json`, JSON.stringify({ type: hit.type }));
     iconMisses.delete(key);
-  } else {
+  } else if (!keepOnMiss) {
     if (iconMisses.size > 1000) iconMisses.clear();
     iconMisses.set(key, Date.now());
   }
@@ -928,16 +947,24 @@ on("PUT", "/api/me", "user", async ({ req, res, user }) => {
 // ---------- Tiles ----------
 on("GET", "/api/sites", "anyone", async ({ res, user }) => json(res, 200, await withBrands(user ? user.sites : readSites())));
 on("GET", "/api/default", "anyone", async ({ res }) => json(res, 200, await withBrands(readSites())));
-on("PUT", "/api/sites", "user", async ({ req, res, user }) => {
+// ?fresh=<tile id>: the tile just edited; its own icon is fetched again before answering.
+const freshIcon = async (sites, url, trusted) => {
+  const site = sites.find((s) => s.id === url.searchParams.get("fresh"));
+  const art = site && artFor(site);
+  if (site && (!art || art.src?.startsWith("/api/icon/"))) await refreshIcon(site, trusted);
+};
+on("PUT", "/api/sites", "user", async ({ req, res, url, user }) => {
   const sites = validSites(await readBody(req));
   if (!sites) return json(res, 400, { error: "invalid site list" });
   accounts.setSites(user, sites);
+  await freshIcon(sites, url, !!user.admin);
   return json(res, 200, await withBrands(sites));
 });
-on("PUT", "/api/default", "admin", async ({ req, res }) => {
+on("PUT", "/api/default", "admin", async ({ req, res, url }) => {
   const sites = validSites(await readBody(req));
   if (!sites) return json(res, 400, { error: "invalid site list" });
   writeSites(sites);
+  await freshIcon(sites, url, true);
   return json(res, 200, await withBrands(sites));
 });
 on("GET", "/api/preview", "anyone", async ({ res, url }) => {

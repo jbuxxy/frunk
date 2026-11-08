@@ -40,7 +40,7 @@ async function fakeCdn() {
     }
     if (/^\/(si\/icons|di\/svg)\/[a-z0-9-]+\.svg$/.test(pathname)) return send("image/svg+xml", svg(pathname));
     if (pathname === "/site/") return send("text/html", '<html><head><link rel="icon" href="/site/icon.png"></head></html>');
-    if (pathname === "/site/icon.png") return send("image/png", png());
+    if (pathname === "/site/icon.png") return send("image/png", png(cdn.iconSize || 200)); // iconSize: the site changed its icon
     if (pathname === "/big.png") return send("image/png", png(Number(searchParams.get("kb")) * 1024));
     res.writeHead(404).end();
   });

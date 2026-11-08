@@ -207,6 +207,21 @@ test("logos and icons", async (t) => {
   assert.equal((await srv.request("GET", `/api/preview-url?u=${u}`, { cookie: member })).status, 404);
 });
 
+test("saving a tile from its edit box fetches its icon again", async (t) => {
+  const cdn = await fakeCdn();
+  const { srv, admin } = await serverWithPeople({ cdn });
+  t.after(() => Promise.all([srv.stop(), cdn.close()]));
+  const [tile] = (await srv.request("PUT", "/api/sites", { cookie: admin, body: [{ name: "Home", url: `${cdn.base}/site/` }] })).body;
+  const first = await srv.request("GET", `/api/icon/${tile.id}`, { cookie: admin });
+  assert.equal(first.status, 200);
+  cdn.iconSize = 300; // the site's icon changed
+  const plain = (await srv.request("PUT", "/api/sites", { cookie: admin, body: [tile] })).body[0];
+  assert.ok(plain.iconV, "the icon was cached");
+  assert.equal((await srv.request("PUT", "/api/sites", { cookie: admin, body: [tile] })).body[0].iconV, plain.iconV, "an ordinary save keeps the cached icon");
+  const fresh = (await srv.request("PUT", `/api/sites?fresh=${tile.id}`, { cookie: admin, body: [tile] })).body[0];
+  assert.notEqual(fresh.iconV, plain.iconV, "the edited tile's icon was fetched again");
+});
+
 test("preview images are capped by total size", async (t) => {
   const cdn = await fakeCdn();
   const { srv, admin } = await serverWithPeople({ cdn });

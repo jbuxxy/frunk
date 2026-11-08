@@ -713,9 +713,11 @@
     render();
   }
 
-  async function save(next) {
+  // fresh: the tile just edited, whose icon Frunk fetches again (a changed icon shows now).
+  async function save(next, fresh) {
     try {
-      sites = await api(editTarget === "default" ? "/api/default" : "/api/sites", { method: "PUT", body: JSON.stringify(next) });
+      const q = fresh ? `?fresh=${encodeURIComponent(fresh)}` : "";
+      sites = await api(`${editTarget === "default" ? "/api/default" : "/api/sites"}${q}`, { method: "PUT", body: JSON.stringify(next) });
     } catch (err) {
       toast(`Couldn't save: ${err.message}`);
       if (err.status === 401) location.reload();
@@ -1557,6 +1559,40 @@
     }
   }
 
+  // No known logo for this site: Auto takes the site's own icon instead of a letter. One
+  // icon: that one. Two of the same picture at different sizes: the bigger. Different
+  // pictures: the site's first (its best by what it says about them).
+  async function siteIconPick(options) {
+    const imgs = options.filter((o) => o.kind === "image");
+    if (!imgs.length) return null;
+    const loaded = (await Promise.all(imgs.map((o) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ o, img });
+      img.onerror = () => resolve(null);
+      img.src = o.preview;
+    })))).filter(Boolean);
+    if (!loaded.length) return null;
+    const thumb = (img) => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 16;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, 16, 16);
+      return ctx.getImageData(0, 0, 16, 16).data;
+    };
+    const same = (a, b) => {
+      try {
+        const x = thumb(a), y = thumb(b);
+        let d = 0;
+        for (let i = 0; i < x.length; i++) d += Math.abs(x[i] - y[i]);
+        return d / x.length < 24;
+      } catch { return false; }
+    };
+    const area = (img) => (img.naturalWidth || 0) * (img.naturalHeight || 0);
+    let best = loaded[0];
+    for (const l of loaded.slice(1)) if (same(best.img, l.img) && area(l.img) > area(best.img)) best = l;
+    return { type: "image", src: best.o.preview, pick: best.o.src };
+  }
+
   async function loadLogoOptions() {
     const url = normalizeUrl(urlInput.value);
     logoChoices = [];
@@ -1568,7 +1604,7 @@
       const r = await api("/api/logo-options", { method: "POST", body: JSON.stringify({ url, name: nameInput.value }) });
       if (seq === logoSeq) {
         logoChoices = r.options;
-        autoArt = r.auto;
+        autoArt = r.auto || (await siteIconPick(r.options));
       }
     } catch {}
     if (seq === logoSeq) {
@@ -1745,12 +1781,14 @@
     const name = nameInput.value.trim() || new URL(url).hostname;
     // Saved only when it differs from the address's default, so a tile keeps following it.
     const fullscreen = fsInput.checked === fullscreenByDefault(url) ? undefined : fsInput.checked;
-    const entry = { name, url, icon: normalizeUrl(iconInput.value) || undefined, color: chosenColor || undefined, logo: chosenLogo || undefined, fullscreen };
+    // Auto with no known logo: the site's own icon it found (see siteIconPick).
+    const autoIcon = !iconInput.value.trim() && !chosenLogo && autoArt && autoArt.pick;
+    const entry = { name, url, icon: normalizeUrl(iconInput.value) || autoIcon || undefined, color: chosenColor || undefined, logo: chosenLogo || undefined, fullscreen };
     const next = editingId
       ? sites.map((s) => (s.id === editingId ? { ...s, ...entry } : s))
       : [...sites, entry];
     siteDialog.close();
-    await save(next);
+    await save(next, editingId);
   };
 
   // ---------- Tiles an admin sent you ----------
