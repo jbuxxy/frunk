@@ -240,6 +240,23 @@ function createAccounts({ dataDir, ownerEmail }) {
     if (!s || s.expires < Date.now()) return null;
     return byId(s.userId) || null;
   }
+  // Their own password, for accounts that sign in with an email and password (made from
+  // an invite link). The current one first; every other device they're signed in on is
+  // signed out (keep: this session's token). Google accounts have no password to change.
+  async function changePassword(user, { current, password }, keep) {
+    password = String(password || "");
+    if (password.length < 8) return { error: "Use at least 8 characters for your password." };
+    if (password.length > 1024) return { error: "That password is too long." };
+    if (!user.password) return { error: "This account signs in with Google." };
+    if (!(await checkPassword(String(current || "").slice(0, 1024), user.password))) {
+      return { error: "That isn't your current password.", wrong: true };
+    }
+    user.password = await hashPassword(password);
+    const kept = keep ? sha(keep) : null;
+    for (const [k, s] of Object.entries(db.sessions)) if (s.userId === user.id && k !== kept) delete db.sessions[k];
+    save();
+    return { ok: true };
+  }
   function endUserSessions(userId) {
     for (const [k, s] of Object.entries(db.sessions)) if (s.userId === userId) delete db.sessions[k];
   }
@@ -323,7 +340,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   return {
     ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
-    people, deleteUser, setSites, setName, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles, grantTile, grantStamp,
+    people, deleteUser, setSites, setName, changePassword, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles, grantTile, grantStamp,
   };
 }
 

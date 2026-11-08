@@ -924,6 +924,7 @@
     $("accountEmail").textContent = me.user.email;
     $("editDefaultBtn").hidden = !me.user.admin;
     $("peopleBtn").hidden = !me.user.admin;
+    $("passwordBtn").hidden = !me.user.password;
     $("appVersion").textContent = me.version ? `Version ${me.version}${me.build ? ` · build ${me.build}` : ""}` : "";
     paintAvatar($("accountAvatar"), avatarColor());
     accountDialog.showModal();
@@ -939,6 +940,28 @@
       renderAccount();
     } catch (err) {
       toast(err.message);
+    }
+  };
+  // Their own password (accounts that sign in with an email and password; Google ones
+  // have none). Other devices are signed out.
+  $("passwordBtn").onclick = () => {
+    accountDialog.close();
+    const f = $("passwordForm");
+    f.reset();
+    f.username.value = me.user.email;
+    $("passwordError").textContent = "";
+    $("passwordDialog").showModal();
+  };
+  $("passwordForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    if (f.password.value !== f.again.value) return ($("passwordError").textContent = "Those passwords don't match.");
+    try {
+      await api("/api/me/password", { method: "PUT", body: JSON.stringify({ current: f.current.value, password: f.password.value }) });
+      $("passwordDialog").close();
+      toast("Password saved. Your other devices are signed out.");
+    } catch (err) {
+      $("passwordError").textContent = err.message;
     }
   };
   $("signOutBtn").onclick = async () => {

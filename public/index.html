@@ -272,6 +272,24 @@
     </form>
   </dialog>
 
+  <!-- Your password: change it, or add one to a Google account -->
+  <dialog class="sheet narrow" id="passwordDialog">
+    <form method="dialog" id="passwordForm">
+      <h2>Change password</h2>
+      <p class="hint">Your other devices will be signed out.</p>
+      <input name="username" type="email" autocomplete="username" hidden readonly>
+      <label>Current password<input name="current" type="password" autocomplete="current-password" required></label>
+      <label>New password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label>New password again<input name="again" type="password" autocomplete="new-password" required></label>
+      <div class="hint error" id="passwordError"></div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" data-close>Cancel</button>
+        <button type="submit" class="pill accent">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Car: QR code for signing in with a phone -->
   <dialog class="sheet narrow" id="pairDialog">
     <form method="dialog">
@@ -352,6 +370,7 @@
       </div>
       <div class="menu">
         <button type="button" class="pill" id="renameBtn">Edit name</button>
+        <button type="button" class="pill" id="passwordBtn" hidden>Change password</button>
         <button type="button" class="pill" id="appsBtn" hidden>Connected apps</button>
         <button type="button" class="pill" id="editDefaultBtn" hidden>Edit public page</button>
         <button type="button" class="pill" id="peopleBtn" hidden>People &amp; invites</button>

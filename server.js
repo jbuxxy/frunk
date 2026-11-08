@@ -845,7 +845,7 @@ function on(method, pattern, access, handler) {
   routes.push({ method, re, keys, access, handler });
 }
 
-const publicUser = (user) => ({ name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null });
+const publicUser = (user) => ({ name: user.name, email: user.email, admin: !!user.admin, avatarColor: user.avatarColor || null, password: !!user.password });
 // Tiles sent to this person that they haven't acknowledged yet, minus any
 // they've already removed from their page.
 const sharedWith = (user) => (user.sharedTiles || [])
@@ -936,6 +936,15 @@ on("GET", "/api/me/shared", "user", ({ res, user }) => json(res, 200, { shared: 
 on("POST", "/api/me/shared/ack", "user", ({ res, user }) => {
   accounts.ackSharedTiles(user);
   return json(res, 200, { ok: true });
+});
+// Change their password (accounts that sign in with email and password). Wrong current passwords count
+// toward the same limit as sign-in.
+on("PUT", "/api/me/password", "user", async ({ req, res, user }) => {
+  const ip = clientIp(req);
+  if (overLimit(failures, ip, 10)) return json(res, 429, { error: "Too many attempts. Try again in 15 minutes." });
+  const r = await accounts.changePassword(user, (await readBody(req)) || {}, cookies(req)[COOKIE]);
+  if (r.wrong) noteAttempt(failures, ip);
+  return r.error ? json(res, 400, { error: r.error }) : json(res, 200, { ok: true });
 });
 on("PUT", "/api/me", "user", async ({ req, res, user }) => {
   const body = (await readBody(req)) || {};
