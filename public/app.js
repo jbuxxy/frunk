@@ -909,6 +909,7 @@
     return isTesla || (coarse && big);
   }
   $("signInBtn").onclick = () => (signInByPhoneFirst() ? startPairing() : openSignIn());
+  let misses = 0;
   $("signInForm").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -917,6 +918,27 @@
       location.replace("/");
     } catch (err) {
       $("signInError").textContent = err.message;
+      if (++misses >= 3) $("forgotBtn").classList.add("stand-out");
+    }
+  };
+  // Forgot password: a reset link by email (accounts made from an invite link).
+  $("forgotBtn").onclick = () => {
+    const f = $("forgotForm");
+    f.email.value = $("signInForm").email.value;
+    $("forgotSaid").textContent = "";
+    $("signInDialog").close();
+    $("forgotDialog").showModal();
+  };
+  $("forgotForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const email = e.target.email.value;
+    try {
+      const r = await api("/api/forgot", { method: "POST", body: JSON.stringify({ email }) });
+      $("forgotSaid").textContent = r.noEmail
+        ? "Email isn't set up on this Frunk. Ask the person who invited you to send a new password link."
+        : `If ${email} has a password for Frunk, a link to choose a new one is on its way. Check your email (and spam).`;
+    } catch (err) {
+      $("forgotSaid").textContent = err.message;
     }
   };
 

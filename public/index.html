@@ -264,10 +264,27 @@
       <label>Email<input name="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <div class="hint error" id="signInError"></div>
+      <!-- Always here; after three wrong passwords it's the obvious next step. -->
+      <button type="button" class="pill forgot-link" id="forgotBtn">Forgot password?</button>
       <div class="sheet-actions">
         <span class="spacer"></span>
         <button type="button" class="pill" id="signInCancel" data-close>Cancel</button>
         <button type="submit" class="pill accent">Sign in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Forgot password: a link by email to choose a new one -->
+  <dialog class="sheet narrow" id="forgotDialog">
+    <form method="dialog" id="forgotForm">
+      <h2>Forgot your password?</h2>
+      <p class="hint">Enter your email and we'll send a link to choose a new one. (Signed in with Google before? Use Continue with Google instead.)</p>
+      <label>Email<input name="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+      <p class="hint" id="forgotSaid" role="status"></p>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" data-close>Back</button>
+        <button type="submit" class="pill accent">Send link</button>
       </div>
     </form>
   </dialog>

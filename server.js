@@ -566,11 +566,12 @@ function mailLog(line) {
 const escapeHtml = (str) => String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 // Invite (or password reset) email. Returns null on success, or the error text.
+// inviter: who sent it (null: they asked for it themselves, from Forgot password).
 async function emailInvite(invite, link, inviter) {
   if (!mailer) return "Email isn't set up";
   const isReset = !!accounts.byEmail(invite.email);
   const kind = isReset ? "password reset" : "invite";
-  const who = (inviter.name || inviter.email.split("@")[0]).trim();
+  const who = inviter ? (inviter.name || inviter.email.split("@")[0]).trim() : "Frunk";
   const tiles = (invite.tiles || []).map((t) => t.name);
   const subject = isReset ? "Reset your Frunk password" : `${who} invited you to Frunk`;
   const lead = isReset
@@ -594,7 +595,7 @@ ${google ? `<tr><td style="font-size:14px;line-height:1.5;color:#8e939b">${escap
   try {
     // Sent as "<inviter> via Frunk". No Reply-To: a free-mail reply address on a
     // custom sending domain scores as forged with spam filters.
-    await mailer.send({ to: invite.email, subject, text, html, fromName: `${who} via Frunk` });
+    await mailer.send({ to: invite.email, subject, text, html, fromName: inviter ? `${who} via Frunk` : "Frunk" });
     mailLog(`sent ${kind} to ${invite.email}`);
     return null;
   } catch (err) {
@@ -650,6 +651,8 @@ function currentUser(req) {
 // and pairing starts (max 20).
 const RATE_WINDOW = 15 * 60_000;
 const failures = new Map(); // ip -> { count, since }
+const forgotten = new Map(); // ip -> Forgot password requests
+const forgotSent = new Map(); // email -> when its last reset link went out
 // The visitor's address. A trusted proxy's X-Real-IP is set, not appended, so
 // it's used as is. X-Forwarded-For is appended to by each hop and its left end
 // is whatever the client sent, so it's read from the right, skipping our own
@@ -662,7 +665,8 @@ function clientIp(req) {
   return hops.at(-1) || req.socket.remoteAddress;
 }
 setInterval(() => {
-  for (const map of [failures, pairStarts]) {
+  for (const [e, at] of forgotSent) if (Date.now() - at >= RATE_WINDOW) forgotSent.delete(e);
+  for (const map of [failures, pairStarts, forgotten]) {
     for (const [ip, f] of map) if (Date.now() - f.since >= RATE_WINDOW) map.delete(ip);
   }
 }, RATE_WINDOW).unref();
@@ -1092,6 +1096,22 @@ on("GET", "/api/admin/people", "admin", ({ req, res, url, user }) => {
   const site = user.sites.find((s) => s.id === url.searchParams.get("tile"));
   if (site) for (const u of p.users) u.has = !!userById(u.id)?.sites.some((s) => s.url === site.url);
   return json(res, 200, { ...p, invites: p.invites.map((i) => inviteLink(req, i)), email: !!mailer });
+});
+// Forgot password: a reset link by email, for an account that signs in with a password.
+// The same answer whether or not there's such an account; at most one link per email
+// every 15 minutes.
+on("POST", "/api/forgot", "anyone", async ({ req, res }) => {
+  const ip = clientIp(req);
+  if (overLimit(forgotten, ip, 5)) return json(res, 429, { error: "Too many attempts. Try again in 15 minutes." });
+  noteAttempt(forgotten, ip);
+  if (!mailer) return json(res, 200, { ok: false, noEmail: true });
+  const user = accounts.byEmail(((await readBody(req)) || {}).email);
+  if (user?.password && !forgotSent.has(user.email)) {
+    forgotSent.set(user.email, Date.now());
+    const invite = accounts.createInvite(user.email, []);
+    if (invite) void emailInvite(invite, inviteLink(req, invite).link, null);
+  }
+  return json(res, 200, { ok: true });
 });
 on("POST", "/api/admin/invites", "admin", async ({ req, res, user }) => {
   const { email, tiles } = (await readBody(req)) || {};

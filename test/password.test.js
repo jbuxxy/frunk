@@ -17,3 +17,15 @@ test("a member changes their password; their other devices are signed out", asyn
   assert.equal((await srv.request("POST", "/api/login", { body: { email: "member@example.com", password: "brand-new-pass" } })).status, 200);
   assert.equal((await srv.request("PUT", "/api/me/password", { body: { current: "x", password: "brand-new-pass" } })).status, 401);
 });
+
+test("forgot password: the same answer for anyone, and limited", async (t) => {
+  const { srv } = await serverWithPeople();
+  t.after(() => srv.stop());
+  const ask = (email) => srv.request("POST", "/api/forgot", { body: { email } });
+  const known = await ask("member@example.com");
+  const unknown = await ask("nobody@example.com");
+  assert.equal(known.status, 200);
+  assert.deepEqual(known.body, unknown.body, "it doesn't say whether the account exists");
+  for (let i = 0; i < 3; i++) await ask("x@example.com");
+  assert.equal((await ask("x@example.com")).status, 429);
+});
