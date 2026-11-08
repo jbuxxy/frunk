@@ -1025,3 +1025,7 @@ dialog.party-pick { width: min(1100px, calc(100vw - 32px)); padding: 24px 28px 2
 .access-row input { min-width: 200px; }
 .access-key { margin-top: 12px; padding: 14px; border-radius: 16px; background: rgba(255, 255, 255, 0.05); }
 .access-key input { font-family: ui-monospace, "SF Mono", monospace; font-size: 14px; }
+/* People: inviting comes last, set apart; what's under the email box is centered. */
+.invite-section { margin-top: 22px; padding-top: 18px; border-top: 2px solid var(--line); }
+.invite-section .invite-tiles-label, .invite-section .hint { text-align: center; }
+.invite-section .invite-tiles { grid-template-columns: repeat(auto-fit, minmax(120px, 150px)); justify-content: center; }
