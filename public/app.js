@@ -948,6 +948,7 @@
     $("accountEmail").textContent = me.user.email;
     $("editDefaultBtn").hidden = !me.user.admin;
     $("peopleBtn").hidden = !me.user.admin;
+    $("accessBtn").hidden = !me.user.admin;
     $("passwordBtn").hidden = !me.user.password;
     $("appVersion").textContent = me.version ? `Version ${me.version}${me.build ? ` · build ${me.build}` : ""}` : "";
     paintAvatar($("accountAvatar"), avatarColor(), undefined, me.user.picture);
@@ -1294,9 +1295,16 @@
   });
   $("accessKeyCopy").onclick = () => { navigator.clipboard?.writeText($("accessKeyValue").value).then(() => toast("Key copied."), () => {}); };
 
-  async function openPeople() {
+  // App access (Frunk Access), admin only: its own sheet from the account menu.
+  $("accessBtn").onclick = () => {
+    accountDialog.close();
     $("accessKey").hidden = true;
+    $("accessList").textContent = "Loading…";
+    $("accessDialog").showModal();
     void renderAccess();
+  };
+
+  async function openPeople() {
     let data;
     try {
       data = await api("/api/admin/people");
@@ -1362,14 +1370,14 @@
         row(i.email, `${i.existing ? "Password reset link" : "Invite"} expired ${fmtDate(i.expires)}${carries}`, [
           ["Re-invite", "", async () => {
             try {
-              deliverInvite(await api(`/api/admin/invites/${i.token}/renew`, { method: "POST", body: "{}" }));
+              deliverInvite(await api(`/api/admin/invites/${i.id}/renew`, { method: "POST", body: "{}" }));
             } catch (err) {
               toast(err.message, 5000);
             }
             openPeople();
           }],
           ["Remove", "danger", async () => {
-            await api(`/api/admin/invites/${i.token}`, { method: "DELETE" });
+            await api(`/api/admin/invites/${i.id}`, { method: "DELETE" });
             openPeople();
           }],
         ], ["Expired", "expired"]);
@@ -1377,12 +1385,12 @@
       }
       row(i.email, `${i.existing ? "Password reset link · " : ""}Expires ${fmtDate(i.expires)}${carries}`, [
         ...(data.email ? [["Resend email", "", async () => {
-          await api(`/api/admin/invites/${i.token}/resend`, { method: "POST", body: "{}" });
+          await api(`/api/admin/invites/${i.id}/resend`, { method: "POST", body: "{}" });
           toast(`Emailed ${i.email} again`);
           return true;
         }, "Sent ✓"]] : []),
         ["Cancel", "danger", async () => {
-          await api(`/api/admin/invites/${i.token}`, { method: "DELETE" });
+          await api(`/api/admin/invites/${i.id}`, { method: "DELETE" });
           openPeople();
         }],
       ], [i.existing ? "Reset" : "Invited", "invited"]);

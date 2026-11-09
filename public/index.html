@@ -402,6 +402,7 @@
         <button type="button" class="pill" id="appsBtn" hidden>Connected apps</button>
         <button type="button" class="pill" id="editDefaultBtn" hidden>Edit public page</button>
         <button type="button" class="pill" id="peopleBtn" hidden>People &amp; invites</button>
+        <button type="button" class="pill" id="accessBtn" hidden>App access</button>
         <button type="button" class="pill danger" id="signOutBtn">Sign out</button>
       </div>
       <p class="hint center version" id="appVersion"></p>
@@ -432,19 +433,6 @@
     <form method="dialog" id="inviteForm">
       <h2 tabindex="-1" autofocus>People</h2>
       <div class="people" id="peopleList"></div>
-      <!-- Frunk Access: your other apps let people in when you've given them that app's tile. -->
-      <div class="field-label">App access <span class="optional">(Frunk Access)</span></div>
-      <p class="hint">An app here lets someone sign in with Google when you've given them its tile here (on the default page, in their invite, or with Send). Each app is its own: a TV tile opens only TV.</p>
-      <div class="people" id="accessList"></div>
-      <div class="invite-row access-row">
-        <input id="accessName" placeholder="Name, like BuxTV" maxlength="40" autocapitalize="words">
-        <input id="accessAddress" type="url" placeholder="https://tv.example.com" autocapitalize="off" spellcheck="false">
-        <button type="button" class="pill accent" id="accessAdd">Connect</button>
-      </div>
-      <div class="access-key" id="accessKey" hidden>
-        <div class="hint">The app key for <b id="accessKeyFor"></b>. It's shown only now: put it in that app's settings (FRUNK_ACCESS_KEY).</div>
-        <div class="invite-row"><input id="accessKeyValue" readonly spellcheck="false"><button type="button" class="pill" id="accessKeyCopy">Copy</button></div>
-      </div>
       <!-- Inviting someone new: last, after who's here and what they can open. -->
       <div class="invite-section">
         <div class="field-label">Invite someone</div>
@@ -466,6 +454,28 @@
       <div class="sheet-actions">
         <span class="spacer"></span>
         <button type="button" class="pill" id="peopleClose" data-close>Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Admin: App access (Frunk Access): your other apps let people in when you've given them that app's tile -->
+  <dialog class="sheet" id="accessDialog">
+    <form method="dialog">
+      <h2 tabindex="-1" autofocus>App access</h2>
+      <p class="hint">An app here lets someone sign in with Google when you've given them its tile (on the default page, in their invite, or with Send). Each app is its own: a TV tile opens only TV.</p>
+      <div class="people" id="accessList"></div>
+      <div class="invite-row access-row">
+        <input id="accessName" placeholder="Name, like BuxTV" maxlength="40" autocapitalize="words">
+        <input id="accessAddress" type="url" placeholder="https://tv.example.com" autocapitalize="off" spellcheck="false">
+        <button type="button" class="pill accent" id="accessAdd">Connect</button>
+      </div>
+      <div class="access-key" id="accessKey" hidden>
+        <div class="hint">The app key for <b id="accessKeyFor"></b>. It's shown only now: put it in that app's settings (FRUNK_ACCESS_KEY).</div>
+        <div class="invite-row"><input id="accessKeyValue" readonly spellcheck="false"><button type="button" class="pill" id="accessKeyCopy">Copy</button></div>
+      </div>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button type="button" class="pill" data-close>Close</button>
       </div>
     </form>
   </dialog>

@@ -1,9 +1,10 @@
 // Frunk accounts: invited users who sign in with Google or a password, each with
-// their own tile list. Stored as JSON under DATA_DIR, no dependencies.
+// their own tile list. Stored as JSON under DATA_DIR, or in Postgres when one is set up (pg.js).
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { promisify } = require("node:util");
+const { laterWriter } = require("./pg");
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -13,31 +14,86 @@ const INVITE_DAYS = 14;
 const SCRYPT = { N: 2 ** 14, r: 8, p: 5, maxmem: 64 * 1024 * 1024 };
 const LEGACY_SCRYPT = { N: 2 ** 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
-function createAccounts({ dataDir, ownerEmail }) {
+function createAccounts({ dataDir, ownerEmail, pg = null }) {
   const FILE = path.join(dataDir, "accounts.json");
   const owner = (ownerEmail || "").trim().toLowerCase();
 
   let db = { users: [], invites: [], sessions: {} };
-  try {
-    db = { ...db, ...JSON.parse(fs.readFileSync(FILE, "utf8")) };
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
+  const readFile = () => {
+    try {
+      return { users: [], invites: [], sessions: {}, ...JSON.parse(fs.readFileSync(FILE, "utf8")) };
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      return null;
+    }
+  };
+  // Older data, brought up to date: invites from before they were hashed (kept working,
+  // as hashes from now on), and an early build's profile color (iconColor). True if
+  // anything changed.
+  function upgrade() {
+    let changed = false;
+    if (db.invites.some((i) => i.token)) {
+      db.invites = db.invites.map(({ token, ...i }) => (token ? { ...i, hash: crypto.createHash("sha256").update(token).digest("hex") } : i));
+      changed = true;
+    }
+    for (const u of db.users) {
+      if (!u.iconColor) continue;
+      u.avatarColor ||= u.iconColor;
+      delete u.iconColor;
+      changed = true;
+    }
+    return changed;
   }
 
+  // ---------- Storage: JSON file, or Postgres (pg.js) ----------
+  const COLS = ["email", "name", "admin", "password", "google", "picture", "created"];
+  const rows = () => ({
+    users: { key: "id", rows: new Map(db.users.map((u) => {
+      const data = Object.fromEntries(Object.entries(u).filter(([k]) => k !== "id" && !COLS.includes(k)));
+      return [u.id, { id: u.id, email: u.email, name: u.name || null, admin: !!u.admin, password: u.password || null, google: u.google || null, picture: u.picture || null, created: u.created || null, data }];
+    })) },
+    sessions: { key: "hash", rows: new Map(Object.entries(db.sessions).map(([hash, { userId, expires, ...data }]) => [hash, { hash, user_id: userId, expires, data }])) },
+    invites: { key: "email", rows: new Map(db.invites.map(({ email, hash, created, ...data }) => [email, { email, hash, created, data }])) },
+  });
+  const writer = pg && laterWriter(() => pg.sync(rows()), "accounts");
   function save() {
+    if (writer) return writer.save();
     fs.mkdirSync(dataDir, { recursive: true });
     const tmp = `${FILE}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, FILE);
   }
-
-  // An early build stored the profile color as iconColor.
-  if (db.users.some((u) => u.iconColor)) {
-    for (const u of db.users) {
-      if (u.iconColor) u.avatarColor ||= u.iconColor;
-      delete u.iconColor;
-    }
-    save();
+  // Before anything else (server start): with Postgres its rows, and the first time,
+  // what accounts.json had.
+  async function load() {
+    if (!pg) return; // (the file is read at once, below)
+    const [users, sessions, invites] = await Promise.all([
+      pg.query("SELECT * FROM users"), pg.query("SELECT * FROM sessions"), pg.query("SELECT * FROM invites"),
+    ]);
+    db = {
+      users: users.rows.map((r) => {
+        const u = { ...r.data, id: r.id, email: r.email, admin: r.admin };
+        for (const k of ["name", "password", "google", "picture"]) if (r[k] !== null) u[k] = r[k];
+        if (r.created) u.created = new Date(r.created).toISOString();
+        return u;
+      }),
+      sessions: Object.fromEntries(sessions.rows.map((r) => [r.hash, { ...r.data, userId: r.user_id, expires: Number(r.expires) }])),
+      invites: invites.rows.map((r) => ({ ...r.data, email: r.email, hash: r.hash, created: new Date(r.created).toISOString() })),
+    };
+    for (const [table, { rows: list }] of Object.entries(rows())) for (const [k, v] of list) pg.remember(table, k, v);
+    const file = !db.users.length && readFile();
+    if (file) {
+      db = file;
+      upgrade();
+      await pg.sync(rows());
+      fs.renameSync(FILE, `${FILE}.imported`);
+      console.log(`[accounts] moved ${db.users.length} people from accounts.json into Postgres`);
+    } else if (upgrade()) save();
+  }
+  const flush = () => (writer ? writer.flush() : undefined);
+  if (!pg) {
+    db = readFile() || db;
+    if (upgrade()) save();
   }
 
   const norm = (email) => String(email || "").trim().toLowerCase();
@@ -103,42 +159,51 @@ function createAccounts({ dataDir, ownerEmail }) {
 
   // Who may sign in with Google: the owner, existing members, and anyone with a
   // live (not expired, not cancelled) invite.
-  const isAllowed = (email) => norm(email) === owner || !!byEmail(email) ||
-    db.invites.some((i) => i.email === norm(email) && findInvite(i.token));
+  const isAllowed = (email) => norm(email) === owner || !!byEmail(email) || !!pendingInvite(email);
 
   // ---------- Invites ----------
   // An invite allows Google sign-in for that email, and its link lets the person
   // set a password. A link for an existing user is a password reset.
   // tiles: copies of the inviter's tiles to add to the new account.
+  //
+  // Kept as { email, hash, created, tiles }: only the SHA-256 of the link's token, so a
+  // copy of the data can't be used to set someone's password. The link itself goes out
+  // once, when it's made (emailed, or shown to the admin). id: a piece of the hash, for
+  // the admin's buttons.
+  const expired = (i) => Date.now() - Date.parse(i.created) > INVITE_DAYS * 86_400_000;
+  const withToken = (i, token) => ({ ...i, hash: undefined, id: i.hash.slice(0, 16), token });
   function createInvite(email, tiles = []) {
     email = norm(email);
     if (email.length > 254 || !/^[^@\s<>"(),;:\\[\]]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email)) return null;
     db.invites = db.invites.filter((i) => i.email !== email);
-    const invite = { email, token: crypto.randomBytes(18).toString("base64url"), created: new Date().toISOString() };
+    const token = crypto.randomBytes(18).toString("base64url");
+    const invite = { email, hash: sha(token), created: new Date().toISOString() };
     if (tiles.length) invite.tiles = tiles.map(({ id, ...t }) => t);
     db.invites.push(invite);
     save();
-    return invite;
+    return withToken(invite, token);
   }
   function findInvite(token) {
-    const invite = db.invites.find((i) => i.token === token);
-    if (!invite || Date.now() - Date.parse(invite.created) > INVITE_DAYS * 86_400_000) return null;
-    return invite;
+    if (typeof token !== "string" || !token) return null;
+    const invite = db.invites.find((i) => i.hash === sha(token));
+    return invite && !expired(invite) ? invite : null;
   }
   function pendingInvite(email) {
     const invite = db.invites.find((i) => i.email === norm(email));
-    return invite && findInvite(invite.token);
+    return invite && !expired(invite) ? invite : null;
   }
-  function renewInvite(token) {
-    const old = db.invites.find((i) => i.token === token);
+  // A fresh link for an invite (same email and tiles; the old link stops working).
+  function renewInvite(id) {
+    const old = db.invites.find((i) => i.hash.slice(0, 16) === id);
     if (!old) return null;
-    old.token = crypto.randomBytes(18).toString("base64url");
+    const token = crypto.randomBytes(18).toString("base64url");
+    old.hash = sha(token);
     old.created = new Date().toISOString();
     save();
-    return old;
+    return withToken(old, token);
   }
-  function deleteInvite(token) {
-    db.invites = db.invites.filter((i) => i.token !== token);
+  function deleteInvite(id) {
+    db.invites = db.invites.filter((i) => i.hash.slice(0, 16) !== id);
     save();
   }
 
@@ -224,7 +289,7 @@ function createAccounts({ dataDir, ownerEmail }) {
       setAvatarColor(user, /^#[0-9a-f]{6}$/i.test(String(avatarColor)) ? avatarColor : null); // chosen on the sign-up form
     }
     user.password = hash;
-    deleteInvite(token);
+    db.invites = db.invites.filter((i) => i.email !== invite.email); // used up
     save();
     return { user };
   }
@@ -305,9 +370,9 @@ function createAccounts({ dataDir, ownerEmail }) {
         google: !!u.google, password: !!u.password, tiles: u.sites.length, created: u.created,
       })),
       invites: db.invites.map((i) => ({
-        email: i.email, token: i.token, created: i.created, existing: !!byEmail(i.email),
+        id: i.hash.slice(0, 16), email: i.email, created: i.created, existing: !!byEmail(i.email),
         expires: new Date(Date.parse(i.created) + INVITE_DAYS * 86_400_000).toISOString(),
-        expired: !findInvite(i.token),
+        expired: expired(i),
         tiles: (i.tiles || []).map((t) => t.name),
       })),
     };
@@ -368,7 +433,7 @@ function createAccounts({ dataDir, ownerEmail }) {
   const allUsers = () => db.users;
 
   return {
-    ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
+    load, flush, ensureOwner, signInWithGoogle, signInWithPassword, acceptInvite, findInvite, pendingInvite, byEmail,
     createInvite, renewInvite, deleteInvite, createSession, userForSession, endSession,
     people, deleteUser, setSites, setName, changePassword, sessionsOf, endSessionById, endOtherSessions, setAvatarColor, setApp, allUsers, addSharedTile, ackSharedTiles, grantTile, grantStamp,
   };

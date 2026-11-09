@@ -1,7 +1,10 @@
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production DATA_DIR=/data
-COPY package.json server.js accounts.js access.js device-info.js mailer.js fetcher.js party.js apps.js ./
+COPY package.json package-lock.json ./
+# Just pg (only used when DATABASE_URL is set); no dev tools in the image.
+RUN npm ci --omit=dev && npm cache clean --force
+COPY server.js accounts.js access.js device-info.js pg.js mailer.js fetcher.js party.js apps.js ./
 # The commit this image was built from, shown with the version in the account
 # menu. Set by CI; empty for a local build.
 ARG FRUNK_BUILD_SHA=""

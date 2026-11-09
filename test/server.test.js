@@ -37,7 +37,7 @@ test("who can call what", async (t) => {
     ["POST", "/api/pair/approve", { code: "ZZZZZZ" }, 401, 404, 404],
     ["GET", "/api/admin/people", undefined, 401, 403, 200],
     ["POST", "/api/admin/invites", { email: "bad" }, 401, 403, 400],
-    ["POST", `/api/admin/invites/${invite.body.token}/resend`, {}, 401, 403, 502], // no SMTP set up
+    ["POST", `/api/admin/invites/${invite.body.id}/resend`, {}, 401, 403, 502], // no SMTP set up
     ["DELETE", "/api/admin/users/nobody", undefined, 401, 403, 400],
     ["POST", "/api/admin/send-tile", { tile: "nope", to: [] }, 401, 403, 400],
     ["GET", "/api/party/sources", undefined, 401, 200, 200],
@@ -292,10 +292,13 @@ test("invites and people", async (t) => {
 
   const people = (await srv.request("GET", "/api/admin/people", { cookie: admin })).body;
   assert.deepEqual(people.users.map((u) => u.email).sort(), ["member@example.com", "owner@example.com"]);
-  assert.ok(people.invites.some((i) => i.email === "new@example.com" && i.link));
+  // Listed by id; the link itself isn't kept (only its hash), so it isn't listed again.
+  const listed = people.invites.find((i) => i.email === "new@example.com");
+  assert.equal(listed.id, inv.body.id);
+  assert.ok(!listed.link && !listed.token && !JSON.stringify(people).includes(inv.body.token));
 
   // Cancelled invites stop working; renewing or resending a made-up one is a 404.
-  await srv.request("DELETE", `/api/admin/invites/${inv.body.token}`, { cookie: admin });
+  await srv.request("DELETE", `/api/admin/invites/${inv.body.id}`, { cookie: admin });
   assert.equal((await srv.request("GET", `/api/invite/${inv.body.token}`)).status, 404);
   assert.equal((await srv.request("POST", "/api/admin/invites/made-up/renew", { cookie: admin, body: {} })).status, 404);
 

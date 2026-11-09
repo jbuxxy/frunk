@@ -16,7 +16,7 @@ to invite them there too.
 
 ## 1. Connect your app in Frunk
 
-As an admin, open **People** → **App access**. Enter the app's name and address (for
+As an admin, open **App access** from the account menu. Enter the app's name and address (for
 example `https://tv.example.com`) and choose **Connect**.
 
 Frunk shows the app's key **once**. Copy it into your app's settings. Frunk keeps only a

@@ -7,6 +7,7 @@ const net = require("node:net");
 
 const { createAccounts, SESSION_DAYS } = require("./accounts");
 const { createAccess } = require("./access");
+const { createPg } = require("./pg");
 const { createMailer } = require("./mailer");
 const fetcher = require("./fetcher");
 const { createParties } = require("./party");
@@ -67,6 +68,18 @@ const MIME = {
 // Only this process writes the file, so its text is kept in memory. Parsed on
 // each read so callers always get their own copy.
 let sitesText = null;
+// With Postgres it's the settings row "default" (loaded at start: loadSites()).
+async function loadSites() {
+  if (!usingPg) return;
+  const { rows } = await pg.query("SELECT value FROM settings WHERE key = 'default'");
+  if (rows.length) { sitesText = JSON.stringify(rows[0].value, null, 2); return; }
+  // First start with Postgres: the file's page (or the seed) goes in.
+  let text = null;
+  try { text = fs.readFileSync(SITES_FILE, "utf8"); } catch (err) { if (err.code !== "ENOENT") throw err; }
+  writeSites(text ? JSON.parse(text) : SEED);
+  if (text) { await sitesWrite; fs.renameSync(SITES_FILE, `${SITES_FILE}.imported`); }
+}
+let sitesWrite = Promise.resolve();
 function readSites() {
   if (sitesText === null) {
     try {
@@ -80,6 +93,14 @@ function readSites() {
 }
 
 function writeSites(sites) {
+  if (usingPg) {
+    sitesText = JSON.stringify(sites, null, 2);
+    const value = sitesText;
+    sitesWrite = sitesWrite.then(() => pg.query(
+      "INSERT INTO settings (key, value) VALUES ('default', $1) ON CONFLICT (key) DO UPDATE SET value = $1", [value],
+    )).catch((err) => console.error(`[pg] couldn't save the default page: ${err.message}`));
+    return;
+  }
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const text = JSON.stringify(sites, null, 2);
   const tmp = `${SITES_FILE}.${process.pid}.tmp`;
@@ -605,9 +626,18 @@ ${google ? `<tr><td style="font-size:14px;line-height:1.5;color:#8e939b">${escap
 }
 
 // ---------- Accounts + sessions ----------
-const accounts = createAccounts({ dataDir: DATA_DIR, ownerEmail: process.env.FRUNK_OWNER_EMAIL });
-const access = createAccess({ dataDir: DATA_DIR });
-accounts.ensureOwner(readSites());
+// Optional Postgres (pg.js): DATABASE_URL or DATABASE_URL_FILE. Connected at start (see
+// the bottom), before anything is read.
+const usingPg = !!(process.env.DATABASE_URL || process.env.DATABASE_URL_FILE);
+let pgReal = null;
+const pgReady = usingPg ? createPg().then((pg) => (pgReal = pg)) : Promise.resolve(null);
+const pg = usingPg ? {
+  query: async (...a) => (await pgReady).query(...a),
+  sync: async (t) => (await pgReady).sync(t),
+  remember: (...a) => pgReal.remember(...a),
+} : null;
+const accounts = createAccounts({ dataDir: DATA_DIR, ownerEmail: process.env.FRUNK_OWNER_EMAIL, pg });
+const access = createAccess({ dataDir: DATA_DIR, pg });
 const COOKIE = "frunk_session";
 
 function cookies(req) {
@@ -1095,7 +1125,7 @@ on("GET", "/api/admin/people", "admin", ({ req, res, url, user }) => {
   // ?tile=<one of the admin's tiles>: who already has it (Send shows them checked).
   const site = user.sites.find((s) => s.id === url.searchParams.get("tile"));
   if (site) for (const u of p.users) u.has = !!userById(u.id)?.sites.some((s) => s.url === site.url);
-  return json(res, 200, { ...p, invites: p.invites.map((i) => inviteLink(req, i)), email: !!mailer });
+  return json(res, 200, { ...p, email: !!mailer }); // (invite links aren't kept, only their hashes)
 });
 // Forgot password: a reset link by email, for an account that signs in with a password.
 // The same answer whether or not there's such an account; at most one link per email
@@ -1121,20 +1151,21 @@ on("POST", "/api/admin/invites", "admin", async ({ req, res, user }) => {
   if (!invite) return json(res, 400, { error: "That doesn't look like an email address." });
   return sendInvite(req, res, user, invite);
 });
-on("POST", "/api/admin/invites/:token/renew", "admin", ({ req, res, params, user }) => {
+on("POST", "/api/admin/invites/:id/renew", "admin", ({ req, res, params, user }) => {
   // Expired invite -> fresh 14-day link (same email + tiles), emailed again.
-  const invite = accounts.renewInvite(params.token);
+  const invite = accounts.renewInvite(params.id);
   if (!invite) return json(res, 404, { error: "That invite no longer exists." });
   return sendInvite(req, res, user, invite);
 });
-on("POST", "/api/admin/invites/:token/resend", "admin", async ({ req, res, params, user }) => {
-  const invite = accounts.findInvite(params.token);
-  if (!invite) return json(res, 404, { error: "That invite has expired." });
+// Send it again: a fresh link by email (only hashes are kept, so it can't be the old one).
+on("POST", "/api/admin/invites/:id/resend", "admin", async ({ req, res, params, user }) => {
+  const invite = accounts.renewInvite(params.id);
+  if (!invite) return json(res, 404, { error: "That invite no longer exists." });
   const emailError = await emailInvite(invite, inviteLink(req, invite).link, user);
   return emailError ? json(res, 502, { error: `Couldn't send: ${emailError}` }) : json(res, 200, { ok: true });
 });
-on("DELETE", "/api/admin/invites/:token", "admin", ({ res, params }) => {
-  accounts.deleteInvite(params.token);
+on("DELETE", "/api/admin/invites/:id", "admin", ({ res, params }) => {
+  accounts.deleteInvite(params.id);
   return json(res, 200, { ok: true });
 });
 on("DELETE", "/api/admin/users/:id", "admin", ({ res, params }) => {
@@ -1557,7 +1588,25 @@ const server = http.createServer(async (req, res) => {
 
 loadBrands();
 loadDashIcons();
-server.listen(PORT, () => {
+// Storage first (with Postgres: connect and read it in), then the owner, then requests.
+(async () => {
+  await pgReady;
+  await Promise.all([accounts.load(), access.load(), loadSites()]);
+  accounts.ensureOwner(readSites());
+  if (usingPg) console.log("Storage: Postgres");
+  server.listen(PORT, onListening);
+})().catch((err) => {
+  console.error(`Couldn't start: ${err.stack || err.message}`);
+  process.exit(1);
+});
+// Stopping (docker stop): what's still to be written goes out first.
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.once(sig, async () => {
+    try { await Promise.all([accounts.flush(), access.flush(), sitesWrite]); } catch {}
+    process.exit(0);
+  });
+}
+function onListening() {
   const port = server.address().port; // PORT=0 picks a free one
   console.log(`Frunk listening on :${port}`);
   if (!process.env.FRUNK_OWNER_EMAIL) console.warn("FRUNK_OWNER_EMAIL isn't set — nobody is admin and nobody can be invited.");
@@ -1566,8 +1615,8 @@ server.listen(PORT, () => {
   // First run (or Google not set up yet): give the owner a way in.
   const owner = process.env.FRUNK_OWNER_EMAIL && accounts.byEmail(process.env.FRUNK_OWNER_EMAIL);
   if (owner && !owner.password && !(owner.google && GOOGLE_ID)) {
-    const invite = accounts.pendingInvite(owner.email) || accounts.createInvite(owner.email);
+    const invite = accounts.createInvite(owner.email); // a fresh link (only hashes are kept)
     if (invite) console.log(`Set the admin password here: ${PUBLIC_URL || `http://localhost:${port}`}/?invite=${invite.token}`);
     else console.warn(`FRUNK_OWNER_EMAIL (${owner.email}) isn't a full email address, so no sign-up link could be made. Use one like you@example.com.`);
   }
-});
+}

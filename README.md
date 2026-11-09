@@ -111,6 +111,7 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `FSP_URL`, `FSP_SECRET` | Optional: an FSP (Front Seat Plex) server on your LAN and its partner secret. In the Tesla, Plex parties then play on a canvas the car doesn't pause while driving, one shared stream per party (H.264 from FSP's iGPU at 720p on newer cars and 480p on older ones, picked by the car's model; MPEG-1 only for a car without an H.264 decoder; a car that keeps running out of sound is offered a lower quality, never switched by itself). Without it the car uses the normal player, which Drive pauses. |
 | `FSP_PUBLIC_URL` | Optional: FSP's public address, e.g. `https://fsp.example.com`. Party cars then stream straight from FSP (with a one-time ticket Frunk gets for them), so Frunk passes no video on; without it, Frunk relays each car's stream. And an FSP tile counts as Plex in a Watch Party: badged, and it opens the Plex picker. In the car, tapping a Plex tile offers to open FSP instead (Plex's own player stops when the car moves), with an option to remember the choice. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
+| `DATABASE_URL` or `DATABASE_URL_FILE` | Optional Postgres, e.g. `postgres://frunk:pass@postgres:5432/frunk` (`_FILE`: a file holding it, such as a Docker secret). Accounts, App access and the default page are then kept there instead of JSON files in `DATA_DIR`, and the first start imports those files (renaming them `*.imported`). Without it, no database is needed. |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
 
 ## Frunk Access: one invite for your other apps
@@ -122,7 +123,7 @@ invite.
 - Each app is its own: a tile for your TV app opens only your TV app.
 - Tiles people add themselves never count.
 
-Add an app under **People → App access** to get its key. The app then asks
+Add an app under **App access** (in the account menu, for admins) to get its key. The app then asks
 Frunk with one HTTP call, or with the dependency-free client in
 [`clients/frunk-access.js`](clients/frunk-access.js). The full guide is in
 [docs/frunk-access.md](docs/frunk-access.md).
@@ -154,10 +155,11 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | File | What it does |
 | --- | --- |
 | `server.js` | HTTP server: static files, JSON API, Google sign-in, phone pairing, icon and logo lookup |
-| `accounts.js` | Users, invites and sessions, stored in `DATA_DIR/accounts.json` |
+| `accounts.js` | Users, invites and sessions, stored in `DATA_DIR/accounts.json` (or Postgres) |
+| `pg.js` | Optional Postgres: the tables, and writing only the rows that changed |
 | `party.js` | Watch Party rooms: members, what's playing and where, who may control it (in memory) |
 | `apps.js` | Apps a Watch Party plays from (Plex, Audiobookshelf), on the servers named in the environment, and the stream proxy |
-| `access.js` | Frunk Access: apps added under People → App access, their keys (hashed) and the check |
+| `access.js` | Frunk Access: apps added under App access, their keys (hashed) and the check |
 | `clients/frunk-access.js` | The dependency-free client other apps copy in to ask Frunk |
 | `fetcher.js` | Outbound fetches for user-supplied URLs, with private-network blocking |
 | `mailer.js` | Minimal SMTP client for invite emails |
@@ -187,6 +189,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 **Passwords and sessions**
 - Passwords are hashed with scrypt (N=2^14, r=8, p=5) and a per-user salt.
   Older hashes are upgraded at the next sign-in.
+- Invite and password-reset links are random, and only their SHA-256 hashes are
+  stored: a link goes out once, when it's made, and Resend sends a fresh one.
 - Session tokens are random, and only their SHA-256 hashes are stored. The cookie
   is `HttpOnly`, `SameSite=Lax`, and `Secure` behind HTTPS.
 - Password sign-in is rate-limited per client IP.
