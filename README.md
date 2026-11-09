@@ -111,7 +111,7 @@ All settings are environment variables. Only `FRUNK_OWNER_EMAIL` is required.
 | `FSP_URL`, `FSP_SECRET` | Optional: an FSP (Front Seat Plex) server on your LAN and its partner secret. In the Tesla, Plex parties then play on a canvas the car doesn't pause while driving, one shared stream per party (H.264 from FSP's iGPU at 720p on newer cars and 480p on older ones, picked by the car's model; MPEG-1 only for a car without an H.264 decoder; a car that keeps running out of sound is offered a lower quality, never switched by itself). Without it the car uses the normal player, which Drive pauses. |
 | `FSP_PUBLIC_URL` | Optional: FSP's public address, e.g. `https://fsp.example.com`. Party cars then stream straight from FSP (with a one-time ticket Frunk gets for them), so Frunk passes no video on; without it, Frunk relays each car's stream. And an FSP tile counts as Plex in a Watch Party: badged, and it opens the Plex picker. In the car, tapping a Plex tile offers to open FSP instead (Plex's own player stops when the car moves), with an option to remember the choice. |
 | `PORT`, `DATA_DIR` | Listen port (default `3000`; `0` picks a free one) and data folder (default `./data`, `/data` in Docker). |
-| `DATABASE_URL` or `DATABASE_URL_FILE` | Optional Postgres, e.g. `postgres://frunk:pass@postgres:5432/frunk` (`_FILE`: a file holding it, such as a Docker secret). Accounts, App access and the default page are then kept there instead of JSON files in `DATA_DIR`, and the first start imports those files (renaming them `*.imported`). Without it, no database is needed. |
+| `DATABASE_URL` or `DATABASE_URL_FILE` | Optional Postgres, e.g. `postgres://frunk:pass@postgres:5432/frunk` (`_FILE`: a file holding it, such as a Docker secret). Without it, accounts, App access and the default page are kept in a SQLite file, `DATA_DIR/frunk.db`, built into Node: nothing to set up. Either way, the first start imports the JSON files older versions kept (renaming them `*.imported`). |
 | `SIMPLE_ICONS_URL`, `DASHBOARD_ICONS_URL` | Where the logo lists and SVGs come from. Defaults to jsDelivr; set these to use a mirror. |
 
 ## Frunk Access: one invite for your other apps
@@ -155,8 +155,8 @@ one containing `Tesla` (Chrome DevTools → Network conditions).
 | File | What it does |
 | --- | --- |
 | `server.js` | HTTP server: static files, JSON API, Google sign-in, phone pairing, icon and logo lookup |
-| `accounts.js` | Users, invites and sessions, stored in `DATA_DIR/accounts.json` (or Postgres) |
-| `pg.js` | Optional Postgres: the tables, and writing only the rows that changed |
+| `accounts.js` | Users, invites and sessions |
+| `db.js`, `sql.js` | Storage: the tables, writing only the rows that changed; SQLite (built in) or Postgres |
 | `party.js` | Watch Party rooms: members, what's playing and where, who may control it (in memory) |
 | `apps.js` | Apps a Watch Party plays from (Plex, Audiobookshelf), on the servers named in the environment, and the stream proxy |
 | `access.js` | Frunk Access: apps added under App access, their keys (hashed) and the check |

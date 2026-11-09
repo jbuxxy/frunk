@@ -7,7 +7,7 @@ const net = require("node:net");
 
 const { createAccounts, SESSION_DAYS } = require("./accounts");
 const { createAccess } = require("./access");
-const { createPg } = require("./pg");
+const { createDb } = require("./db");
 const { createMailer } = require("./mailer");
 const fetcher = require("./fetcher");
 const { createParties } = require("./party");
@@ -65,15 +65,13 @@ const MIME = {
   ".webmanifest": "application/manifest+json",
 };
 
-// Only this process writes the file, so its text is kept in memory. Parsed on
-// each read so callers always get their own copy.
+// The settings row "default", loaded at start (loadSites()) and kept in memory as text.
+// Parsed on each read so callers always get their own copy.
 let sitesText = null;
-// With Postgres it's the settings row "default" (loaded at start: loadSites()).
 async function loadSites() {
-  if (!usingPg) return;
-  const { rows } = await pg.query("SELECT value FROM settings WHERE key = 'default'");
+  const { rows } = await store.query("SELECT value FROM settings WHERE key = 'default'");
   if (rows.length) { sitesText = JSON.stringify(rows[0].value, null, 2); return; }
-  // First start with Postgres: the file's page (or the seed) goes in.
+  // First start: an older version's sites.json (or the seed) goes in.
   let text = null;
   try { text = fs.readFileSync(SITES_FILE, "utf8"); } catch (err) { if (err.code !== "ENOENT") throw err; }
   writeSites(text ? JSON.parse(text) : SEED);
@@ -81,32 +79,15 @@ async function loadSites() {
 }
 let sitesWrite = Promise.resolve();
 function readSites() {
-  if (sitesText === null) {
-    try {
-      sitesText = fs.readFileSync(SITES_FILE, "utf8");
-    } catch (err) {
-      if (err.code !== "ENOENT") throw err;
-      writeSites(SEED);
-    }
-  }
   return JSON.parse(sitesText);
 }
 
 function writeSites(sites) {
-  if (usingPg) {
-    sitesText = JSON.stringify(sites, null, 2);
-    const value = sitesText;
-    sitesWrite = sitesWrite.then(() => pg.query(
-      "INSERT INTO settings (key, value) VALUES ('default', $1) ON CONFLICT (key) DO UPDATE SET value = $1", [value],
-    )).catch((err) => console.error(`[pg] couldn't save the default page: ${err.message}`));
-    return;
-  }
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const text = JSON.stringify(sites, null, 2);
-  const tmp = `${SITES_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, SITES_FILE);
-  sitesText = text;
+  sitesText = JSON.stringify(sites, null, 2);
+  const value = sitesText;
+  sitesWrite = sitesWrite.then(() => store.query(
+    "INSERT INTO settings (key, value) VALUES ('default', $1) ON CONFLICT (key) DO UPDATE SET value = $1", [value],
+  )).catch((err) => console.error(`[db] couldn't save the default page: ${err.message}`));
 }
 
 function validSites(body) {
@@ -626,18 +607,17 @@ ${google ? `<tr><td style="font-size:14px;line-height:1.5;color:#8e939b">${escap
 }
 
 // ---------- Accounts + sessions ----------
-// Optional Postgres (pg.js): DATABASE_URL or DATABASE_URL_FILE. Connected at start (see
-// the bottom), before anything is read.
-const usingPg = !!(process.env.DATABASE_URL || process.env.DATABASE_URL_FILE);
-let pgReal = null;
-const pgReady = usingPg ? createPg().then((pg) => (pgReal = pg)) : Promise.resolve(null);
-const pg = usingPg ? {
-  query: async (...a) => (await pgReady).query(...a),
-  sync: async (t) => (await pgReady).sync(t),
-  remember: (...a) => pgReal.remember(...a),
-} : null;
-const accounts = createAccounts({ dataDir: DATA_DIR, ownerEmail: process.env.FRUNK_OWNER_EMAIL, pg });
-const access = createAccess({ dataDir: DATA_DIR, pg });
+// The database (db.js): SQLite in DATA_DIR, or Postgres with DATABASE_URL or
+// DATABASE_URL_FILE. Opened at start (see the bottom), before anything is read.
+let storeReal = null;
+const storeReady = createDb({ dataDir: DATA_DIR }).then((db) => (storeReal = db));
+const store = {
+  query: async (...a) => (await storeReady).query(...a),
+  sync: async (t) => (await storeReady).sync(t),
+  remember: (...a) => storeReal.remember(...a),
+};
+const accounts = createAccounts({ dataDir: DATA_DIR, ownerEmail: process.env.FRUNK_OWNER_EMAIL, store });
+const access = createAccess({ dataDir: DATA_DIR, store });
 const COOKIE = "frunk_session";
 
 function cookies(req) {
@@ -1590,10 +1570,10 @@ loadBrands();
 loadDashIcons();
 // Storage first (with Postgres: connect and read it in), then the owner, then requests.
 (async () => {
-  await pgReady;
+  await storeReady;
   await Promise.all([accounts.load(), access.load(), loadSites()]);
   accounts.ensureOwner(readSites());
-  if (usingPg) console.log("Storage: Postgres");
+  console.log(`Storage: ${storeReal.kind === "postgres" ? "Postgres" : `SQLite (${path.join(DATA_DIR, "frunk.db")})`}`);
   server.listen(PORT, onListening);
 })().catch((err) => {
   console.error(`Couldn't start: ${err.stack || err.message}`);

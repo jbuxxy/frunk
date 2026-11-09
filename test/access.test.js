@@ -7,14 +7,17 @@ const os = require("node:os");
 const path = require("node:path");
 const { createAccounts } = require("../accounts");
 const { createAccess } = require("../access");
+const { createDb } = require("../db");
 const { fakeCdn, serverWithPeople } = require("./helpers");
 
 const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), "frunk-access-"));
 
 test("only a tile an admin gave counts, and only for its own app", async () => {
   const d = dir();
-  const accounts = createAccounts({ dataDir: d, ownerEmail: "owner@example.com" });
-  const access = createAccess({ dataDir: d });
+  const store = await createDb({ dataDir: d, url: null });
+  const accounts = createAccounts({ dataDir: d, ownerEmail: "owner@example.com", store });
+  const access = createAccess({ dataDir: d, store });
+  await Promise.all([accounts.load(), access.load()]);
   const tv = access.add("TV", "https://tv.example.com/watch");
   const drive = access.add("Drive", "https://drive.example.com");
   assert.equal(tv.app.origin, "https://tv.example.com");
@@ -44,7 +47,11 @@ test("only a tile an admin gave counts, and only for its own app", async () => {
   assert.equal(access.appForKey(tv.key), null);
   assert.ok(access.appForKey(again.key));
   // Keys are never stored, only their hashes.
-  assert.ok(!fs.readFileSync(path.join(d, "access.json"), "utf8").includes(again.key));
+  await access.flush();
+  const stored = (await store.query("SELECT * FROM access_apps")).rows;
+  assert.equal(stored.length, 2);
+  assert.ok(!JSON.stringify(stored).includes(again.key));
+  assert.ok(stored.some((r) => r.key_hash === require("node:crypto").createHash("sha256").update(again.key).digest("hex")));
 });
 
 test("over HTTP: connect an app, send a tile, check", async (t) => {

@@ -1,17 +1,12 @@
-// Optional Postgres. With DATABASE_URL (or DATABASE_URL_FILE, a Docker secret) set,
-// accounts, connected apps and the default page are kept in Postgres; without it, in
-// JSON files under DATA_DIR as always (no database needed to run Frunk).
+// Where accounts, connected apps and the default page are kept: a SQLite file in
+// DATA_DIR (frunk.db, built into Node, nothing to set up), or Postgres when
+// DATABASE_URL (or DATABASE_URL_FILE, a Docker secret) is set. See sql.js.
 //
 // Either way they're served from memory: what changed is written a moment later, a
-// burst of changes as one write. With Postgres that's only the rows that changed, in
-// one transaction. The first start with Postgres imports the JSON files (and renames
-// them *.imported).
-const fs = require("node:fs");
-
-function connectionString() {
-  if (process.env.DATABASE_URL_FILE) return fs.readFileSync(process.env.DATABASE_URL_FILE, "utf8").trim();
-  return process.env.DATABASE_URL || null;
-}
+// burst of changes as one write, only the rows that changed, in one transaction. The
+// first start imports the JSON files older versions kept (and renames them *.imported).
+const path = require("node:path");
+const { databaseUrl, openDatabase } = require("./sql");
 
 // A person's account in columns; data: what else Frunk keeps (tiles, connected apps…).
 const SCHEMA = `
@@ -53,26 +48,14 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `;
 
-// null without a database configured.
-async function createPg() {
-  const url = connectionString();
-  if (!url) return null;
-  const { Pool } = require("pg");
-  const pool = new Pool({ connectionString: url, max: 4, idleTimeoutMillis: 30_000 });
-  pool.on("error", (err) => console.warn(`[pg] ${err.message}`));
-  // The database may still be starting when the container comes up.
-  for (let attempt = 1; ; attempt++) {
-    try { await pool.query(SCHEMA); break; } catch (err) {
-      if (attempt >= 15) throw err;
-      console.warn(`[pg] waiting for Postgres (${err.message})`);
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  }
+async function createDb({ dataDir, url = databaseUrl() }) {
+  const db = await openDatabase({ url, file: path.join(dataDir, "frunk.db"), schema: SCHEMA });
   // What each row was when last written ("table|key" -> its values), so a write sends
   // only rows that changed, and deletes rows that are gone.
   const written = new Map();
   return {
-    query: (text, params) => pool.query(text, params),
+    kind: db.kind,
+    query: (text, params) => db.query(text, params),
     // Remember rows as the database has them now (after a read).
     remember(table, key, values) { written.set(`${table}|${key}`, JSON.stringify(values)); },
     // tables: { [table]: { key: column, rows: Map(key -> { column: value }) } }. Upserts
@@ -90,44 +73,36 @@ async function createPg() {
         }
       }
       if (!changes.length) return;
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
+      await db.transaction(async (q) => {
         for (const { table, key, k, values } of changes) {
-          if (!values) { await client.query(`DELETE FROM ${table} WHERE ${key} = $1`, [k]); continue; }
+          if (!values) { await q(`DELETE FROM ${table} WHERE ${key} = $1`, [k]); continue; }
           const cols = Object.keys(values);
           const sets = cols.filter((c) => c !== key).map((c) => `${c} = EXCLUDED.${c}`).join(", ");
-          await client.query(
+          await q(
             `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})
              ON CONFLICT (${key}) DO ${sets ? `UPDATE SET ${sets}` : "NOTHING"}`,
             cols.map((c) => values[c]));
         }
-        await client.query("COMMIT");
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw err;
-      } finally {
-        client.release();
-      }
+      });
       for (const c of changes) {
         if (c.values) written.set(`${c.table}|${c.k}`, c.json);
         else written.delete(`${c.table}|${c.k}`);
       }
     },
-    end: () => pool.end(),
+    end: () => db.end(),
   };
 }
 
-// save() for a store: with Postgres, write() runs a moment later (a burst of changes as
-// one write), retried in 30 s if it fails (memory still has everything); flush() writes
-// now (before the process stops).
+// save() for a store: write() runs a moment later (a burst of changes as one write),
+// retried in 30 s if it fails (memory still has everything); flush() writes now
+// (before the process stops).
 function laterWriter(write, label) {
   let timer = null, running = null, again = false;
   const run = async () => {
     timer = null;
     if (running) { again = true; return running; }
     running = write().catch((err) => {
-      console.error(`[pg] couldn't save ${label}: ${err.message}`);
+      console.error(`[db] couldn't save ${label}: ${err.message}`);
       timer ||= setTimeout(run, 30_000);
     }).finally(() => {
       running = null;
@@ -141,4 +116,4 @@ function laterWriter(write, label) {
   };
 }
 
-module.exports = { createPg, laterWriter };
+module.exports = { createDb, laterWriter };

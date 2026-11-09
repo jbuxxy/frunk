@@ -5,11 +5,18 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { createAccounts } = require("../accounts");
+const { createDb } = require("../db");
 
-const fresh = () => createAccounts({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "frunk-")), ownerEmail: "owner@example.com" });
+// A new SQLite database each time (DATABASE_URL isn't passed on).
+const fresh = async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "frunk-"));
+  const a = createAccounts({ dataDir, ownerEmail: "owner@example.com", store: await createDb({ dataDir, url: null }) });
+  await a.load();
+  return a;
+};
 
 test("invite -> account with a password, then sign in", async () => {
-  const a = fresh();
+  const a = await fresh();
   const invite = a.createInvite("Friend@Example.com");
   assert.equal(invite.email, "friend@example.com");
   const { user } = await a.acceptInvite(invite.token, { name: "Friend", password: "correct horse" }, []);
@@ -21,7 +28,7 @@ test("invite -> account with a password, then sign in", async () => {
 });
 
 test("old hashes still work and are upgraded on sign-in", async () => {
-  const a = fresh();
+  const a = await fresh();
   const invite = a.createInvite("old@example.com");
   const { user } = await a.acceptInvite(invite.token, { password: "hunter22" }, []);
   const salt = crypto.randomBytes(16);
@@ -32,7 +39,7 @@ test("old hashes still work and are upgraded on sign-in", async () => {
 });
 
 test("password reset signs out other sessions", async () => {
-  const a = fresh();
+  const a = await fresh();
   const { user } = await a.acceptInvite(a.createInvite("r@example.com").token, { password: "first-pass" }, []);
   const session = a.createSession(user.id);
   assert.equal(a.userForSession(session).id, user.id);
@@ -40,8 +47,8 @@ test("password reset signs out other sessions", async () => {
   assert.equal(a.userForSession(session), null);
 });
 
-test("only invited people can sign in with Google", () => {
-  const a = fresh();
+test("only invited people can sign in with Google", async () => {
+  const a = await fresh();
   const google = (email) => a.signInWithGoogle({ sub: email, email, emailVerified: true }, []);
   assert.ok(google("stranger@example.com").error);
   a.createInvite("guest@example.com");
@@ -49,15 +56,15 @@ test("only invited people can sign in with Google", () => {
   assert.ok(a.signInWithGoogle({ sub: "x", email: "guest2@example.com", emailVerified: false }, []).error);
 });
 
-test("odd email addresses are refused", () => {
-  const a = fresh();
+test("odd email addresses are refused", async () => {
+  const a = await fresh();
   for (const bad of ["a>b@example.com", "a@b", "a b@example.com", "a@example.com\r\nRCPT TO:<x@y.z>", `${"a".repeat(250)}@example.com`]) {
     assert.equal(a.createInvite(bad), null, bad);
   }
 });
 
 test("profile color: hex only, null resets to default", async () => {
-  const a = fresh();
+  const a = await fresh();
   const { user } = await a.acceptInvite(a.createInvite("c@example.com").token, { password: "colorful1" }, []);
   assert.ok(a.setAvatarColor(user, "#3E6AE1"));
   assert.equal(user.avatarColor, "#3e6ae1");
@@ -67,7 +74,7 @@ test("profile color: hex only, null resets to default", async () => {
 });
 
 test("new accounts pick a color: on the sign-up form, or once after Google sign-up", async () => {
-  const a = fresh();
+  const a = await fresh();
   const { user: pw } = await a.acceptInvite(a.createInvite("pw@example.com").token, { password: "longenough", avatarColor: "#9146FF" }, []);
   assert.equal(pw.avatarColor, "#9146ff");
   assert.equal(pw.pickColor, undefined);

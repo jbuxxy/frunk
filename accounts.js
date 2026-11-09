@@ -1,10 +1,10 @@
 // Frunk accounts: invited users who sign in with Google or a password, each with
-// their own tile list. Stored as JSON under DATA_DIR, or in Postgres when one is set up (pg.js).
+// their own tile list. Kept in the database (db.js: SQLite in DATA_DIR, or Postgres).
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { promisify } = require("node:util");
-const { laterWriter } = require("./pg");
+const { laterWriter } = require("./db");
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -14,7 +14,8 @@ const INVITE_DAYS = 14;
 const SCRYPT = { N: 2 ** 14, r: 8, p: 5, maxmem: 64 * 1024 * 1024 };
 const LEGACY_SCRYPT = { N: 2 ** 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
-function createAccounts({ dataDir, ownerEmail, pg = null }) {
+// store: db.js's createDb(). Call load() before use.
+function createAccounts({ dataDir, ownerEmail, store }) {
   const FILE = path.join(dataDir, "accounts.json");
   const owner = (ownerEmail || "").trim().toLowerCase();
 
@@ -45,7 +46,7 @@ function createAccounts({ dataDir, ownerEmail, pg = null }) {
     return changed;
   }
 
-  // ---------- Storage: JSON file, or Postgres (pg.js) ----------
+  // ---------- Storage: the database (db.js) ----------
   const COLS = ["email", "name", "admin", "password", "google", "picture", "created"];
   const rows = () => ({
     users: { key: "id", rows: new Map(db.users.map((u) => {
@@ -55,20 +56,13 @@ function createAccounts({ dataDir, ownerEmail, pg = null }) {
     sessions: { key: "hash", rows: new Map(Object.entries(db.sessions).map(([hash, { userId, expires, ...data }]) => [hash, { hash, user_id: userId, expires, data }])) },
     invites: { key: "email", rows: new Map(db.invites.map(({ email, hash, created, ...data }) => [email, { email, hash, created, data }])) },
   });
-  const writer = pg && laterWriter(() => pg.sync(rows()), "accounts");
-  function save() {
-    if (writer) return writer.save();
-    fs.mkdirSync(dataDir, { recursive: true });
-    const tmp = `${FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, FILE);
-  }
-  // Before anything else (server start): with Postgres its rows, and the first time,
-  // what accounts.json had.
+  const writer = laterWriter(() => store.sync(rows()), "accounts");
+  const save = () => writer.save();
+  // Before anything else (server start): the database's rows, and the first time, what
+  // an older version's accounts.json had.
   async function load() {
-    if (!pg) return; // (the file is read at once, below)
     const [users, sessions, invites] = await Promise.all([
-      pg.query("SELECT * FROM users"), pg.query("SELECT * FROM sessions"), pg.query("SELECT * FROM invites"),
+      store.query("SELECT * FROM users"), store.query("SELECT * FROM sessions"), store.query("SELECT * FROM invites"),
     ]);
     db = {
       users: users.rows.map((r) => {
@@ -80,21 +74,17 @@ function createAccounts({ dataDir, ownerEmail, pg = null }) {
       sessions: Object.fromEntries(sessions.rows.map((r) => [r.hash, { ...r.data, userId: r.user_id, expires: Number(r.expires) }])),
       invites: invites.rows.map((r) => ({ ...r.data, email: r.email, hash: r.hash, created: new Date(r.created).toISOString() })),
     };
-    for (const [table, { rows: list }] of Object.entries(rows())) for (const [k, v] of list) pg.remember(table, k, v);
+    for (const [table, { rows: list }] of Object.entries(rows())) for (const [k, v] of list) store.remember(table, k, v);
     const file = !db.users.length && readFile();
     if (file) {
       db = file;
       upgrade();
-      await pg.sync(rows());
+      await store.sync(rows());
       fs.renameSync(FILE, `${FILE}.imported`);
-      console.log(`[accounts] moved ${db.users.length} people from accounts.json into Postgres`);
+      console.log(`[accounts] moved ${db.users.length} people from accounts.json into the database`);
     } else if (upgrade()) save();
   }
-  const flush = () => (writer ? writer.flush() : undefined);
-  if (!pg) {
-    db = readFile() || db;
-    if (upgrade()) save();
-  }
+  const flush = () => writer.flush();
 
   const norm = (email) => String(email || "").trim().toLowerCase();
   const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");

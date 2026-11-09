@@ -11,12 +11,12 @@
 // someone added themselves, or edited to point elsewhere, never counts. Each app is its
 // own grant: a BuxTV tile opens BuxTV, nothing else. See docs/frunk-access.md.
 //
-// Stored in DATA_DIR/access.json, or Postgres when one's set up (pg.js): apps and the
-// SHA-256 of their keys (never the keys).
+// Kept in the database (db.js: SQLite in DATA_DIR, or Postgres): apps and the SHA-256 of
+// their keys (never the keys).
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { laterWriter } = require("./pg");
+const { laterWriter } = require("./db");
 
 const sha = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
 // "https://BuxTV.example.com/some/page" -> "https://buxtv.example.com"
@@ -30,38 +30,31 @@ function originOf(u) {
   }
 }
 
-// pg: optional Postgres (pg.js); otherwise DATA_DIR/access.json.
-function createAccess({ dataDir, pg = null }) {
+// store: db.js's createDb(). Call load() before use.
+function createAccess({ dataDir, store }) {
   const FILE = path.join(dataDir, "access.json");
   const readFile = () => {
     try { return { apps: [], ...JSON.parse(fs.readFileSync(FILE, "utf8")) }; } catch (err) { if (err.code !== "ENOENT") throw err; return null; }
   };
-  let db = (!pg && readFile()) || { apps: [] };
+  let db = { apps: [] };
   const rows = () => ({ access_apps: { key: "id", rows: new Map(db.apps.map((a) => [a.id, { id: a.id, name: a.name, origin: a.origin, key_hash: a.keyHash, created: a.created, used: a.used || null }])) } });
-  const writer = pg && laterWriter(() => pg.sync(rows()), "connected apps");
-  const save = () => {
-    if (writer) return writer.save();
-    fs.mkdirSync(dataDir, { recursive: true });
-    const tmp = `${FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, FILE);
-  };
-  // With Postgres, before anything else (server start): its rows, or the first time
-  // what access.json had.
+  const writer = laterWriter(() => store.sync(rows()), "connected apps");
+  const save = () => writer.save();
+  // Before anything else (server start): the database's rows, or the first time what an
+  // older version's access.json had.
   async function load() {
-    if (!pg) return;
-    const { rows: list } = await pg.query("SELECT * FROM access_apps");
+    const { rows: list } = await store.query("SELECT * FROM access_apps");
     db = { apps: list.map((r) => ({ id: r.id, name: r.name, origin: r.origin, keyHash: r.key_hash, created: new Date(r.created).toISOString(), ...(r.used ? { used: new Date(r.used).toISOString() } : {}) })) };
-    for (const [k, v] of rows().access_apps.rows) pg.remember("access_apps", k, v);
+    for (const [k, v] of rows().access_apps.rows) store.remember("access_apps", k, v);
     const file = db.apps.length ? null : readFile();
     if (file && file.apps.length) {
       db = file;
-      await pg.sync(rows());
+      await store.sync(rows());
       fs.renameSync(FILE, `${FILE}.imported`);
-      console.log(`[access] moved ${db.apps.length} connected apps from access.json into Postgres`);
+      console.log(`[access] moved ${db.apps.length} connected apps from access.json into the database`);
     }
   }
-  const flush = () => (writer ? writer.flush() : undefined);
+  const flush = () => writer.flush();
   const newKey = () => `fa_${crypto.randomBytes(32).toString("base64url")}`;
   const view = (a) => ({ id: a.id, name: a.name, origin: a.origin, created: a.created, used: a.used || null });
 
