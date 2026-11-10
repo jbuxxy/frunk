@@ -46,7 +46,9 @@ async function openPostgres(url, schema, label) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const out = await fn((text, params) => client.query(text, params));
+        const q = (text, params) => client.query(text, params);
+        q.query = q; // (called as q(…) or q.query(…))
+        const out = await fn(q);
         await client.query("COMMIT");
         return out;
       } catch (err) {
@@ -70,26 +72,50 @@ function quietSqliteWarning() {
   };
 }
 
-/** Column name -> type, from CREATE TABLE statements. */
+/** Column name -> type, from CREATE TABLE and ALTER TABLE … ADD COLUMN statements. */
 function columnTypes(schema) {
   const types = new Map();
+  const add = (name, type) => {
+    if (!/^(PRIMARY|UNIQUE|CONSTRAINT|FOREIGN|CHECK)$/i.test(name)) types.set(name.toLowerCase(), type.toLowerCase());
+  };
   for (const [, body] of schema.matchAll(/CREATE TABLE[^(]*\(([\s\S]*?)\n\s*\);/gi)) {
     for (const line of body.split("\n")) {
-      const m = line.trim().match(/^([a-z_][a-z0-9_]*)\s+([a-z]+)/i);
-      if (m && !/^(PRIMARY|UNIQUE|CONSTRAINT|FOREIGN|CHECK)$/i.test(m[1])) types.set(m[1].toLowerCase(), m[2].toLowerCase());
+      const m = line.trim().match(/^([a-z_][a-z0-9_]*)\s+([a-z0-9]+)/i);
+      if (m) add(m[1], m[2]);
     }
   }
+  for (const m of schema.matchAll(/ADD COLUMN\s+(?:IF NOT EXISTS\s+)?([a-z_][a-z0-9_]*)\s+([a-z0-9]+)/gi)) add(m[1], m[2]);
   return types;
 }
 
-// What SQLite can't run as written. DEFAULT now() becomes the current time as an ISO
-// string (as stored by this file), and now() in queries likewise.
+// What SQLite can't run as written:
+//   $1 -> ?1; now() -> the current time as an ISO string (as stored here); ::type casts
+//   dropped; bigserial/serial keys -> SQLite's own.
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 function toSqlite(text) {
   return text
     .replace(/\$(\d+)/g, "?$1")
     .replace(/DEFAULT\s+now\(\)/gi, `DEFAULT (${NOW_SQL})`)
-    .replace(/\bnow\(\)/gi, NOW_SQL);
+    .replace(/\bnow\(\)/gi, NOW_SQL)
+    .replace(/::[a-z_]+(\[\])?/gi, "")
+    .replace(/\b(big)?serial\s+PRIMARY KEY/gi, "INTEGER PRIMARY KEY AUTOINCREMENT");
+}
+
+// The schema, one statement at a time. SQLite has no ADD COLUMN IF NOT EXISTS, so that's
+// checked here.
+function applySchema(db, schema) {
+  for (const raw of toSqlite(schema).split(/;\s*(?:\n|$)/)) {
+    const st = raw.replace(/^\s*--.*$/gm, "").trim();
+    if (!st) continue;
+    const add = st.match(/^ALTER TABLE\s+([a-z_][a-z0-9_]*)\s+ADD COLUMN\s+IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s+([\s\S]*)$/i);
+    if (add) {
+      const [, table, column, rest] = add;
+      const has = db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column);
+      if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${rest}`);
+      continue;
+    }
+    db.exec(st);
+  }
 }
 
 function bindValue(v) {
@@ -108,7 +134,7 @@ function openSqlite(file, schema) {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
   try { fs.chmodSync(file, 0o600); } catch {}
-  db.exec(toSqlite(schema));
+  applySchema(db, schema);
   const types = columnTypes(schema);
   const decode = (row) => {
     for (const [col, v] of Object.entries(row)) {
@@ -155,7 +181,9 @@ function openSqlite(file, schema) {
     transaction: (fn) => serial(async () => {
       db.exec("BEGIN IMMEDIATE");
       try {
-        const out = await fn(async (text, params) => run(text, params));
+        const q = async (text, params) => run(text, params);
+        q.query = q; // (called as q(…) or, like a pg client, q.query(…))
+        const out = await fn(q);
         db.exec("COMMIT");
         return out;
       } catch (err) {
@@ -167,4 +195,4 @@ function openSqlite(file, schema) {
   };
 }
 
-module.exports = { databaseUrl, openDatabase, toSqlite, columnTypes };
+module.exports = { databaseUrl, openDatabase, toSqlite, columnTypes, applySchema };
