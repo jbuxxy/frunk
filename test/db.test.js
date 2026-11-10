@@ -33,6 +33,16 @@ for (const [name, url] of drivers) {
     assert.equal((await store.query("SELECT * FROM users")).rows.length, 0);
   });
 
+  test(`${name}: arrays with ANY(), and columns under another name`, async (t) => {
+    const store = await createDb({ dataDir: dir(), url });
+    t.after(() => store.end());
+    if (url) await store.query("DELETE FROM settings");
+    for (const k of ["a", "b", "c"]) await store.query("INSERT INTO settings (key, value) VALUES ($1, $2)", [k, { k }]);
+    await store.query("DELETE FROM settings WHERE NOT (key = ANY($1::text[]))", [["a", "c"]]);
+    const { rows } = await store.query("SELECT key, value AS v, count(*) OVER ()::int AS n FROM settings ORDER BY key");
+    assert.deepEqual(rows.map((r) => [r.key, r.v, Number(r.n)]), [["a", { k: "a" }, 2], ["c", { k: "c" }, 2]]);
+  });
+
   test(`${name}: a failed transaction leaves nothing behind`, async (t) => {
     const store = await createDb({ dataDir: dir(), url });
     t.after(() => store.end());

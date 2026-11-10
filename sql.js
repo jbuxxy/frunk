@@ -90,7 +90,8 @@ function columnTypes(schema) {
 
 // What SQLite can't run as written:
 //   $1 -> ?1; now() -> the current time as an ISO string (as stored here); ::type casts
-//   dropped; bigserial/serial keys -> SQLite's own.
+//   dropped; bigserial/serial keys -> SQLite's own; x = ANY($1) (an array) -> x IN (the
+//   array, sent as JSON).
 const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 function toSqlite(text) {
   return text
@@ -98,6 +99,7 @@ function toSqlite(text) {
     .replace(/DEFAULT\s+now\(\)/gi, `DEFAULT (${NOW_SQL})`)
     .replace(/\bnow\(\)/gi, NOW_SQL)
     .replace(/::[a-z_]+(\[\])?/gi, "")
+    .replace(/=\s*ANY\(\s*\?(\d+)\s*\)/gi, "IN (SELECT value FROM json_each(?$1))")
     .replace(/\b(big)?serial\s+PRIMARY KEY/gi, "INTEGER PRIMARY KEY AUTOINCREMENT");
 }
 
@@ -136,10 +138,19 @@ function openSqlite(file, schema) {
   try { fs.chmodSync(file, 0o600); } catch {}
   applySchema(db, schema);
   const types = columnTypes(schema);
-  const decode = (row) => {
+  // Each result column's type: as declared on the table it comes from (so "extra AS
+  // prefs_extra" still reads as JSON), else by its name.
+  const typesOf = (st) => {
+    let cols = [];
+    try { cols = st.columns(); } catch {}
+    const out = new Map();
+    for (const c of cols) out.set(c.name, String(c.type || "").toLowerCase().split("(")[0] || types.get(c.name.toLowerCase()));
+    return out;
+  };
+  const decode = (row, colTypes) => {
     for (const [col, v] of Object.entries(row)) {
       if (v === null) continue;
-      const type = types.get(col.toLowerCase());
+      const type = colTypes.get(col) || types.get(col.toLowerCase());
       if (type === "boolean" || type === "bool") row[col] = !!v;
       else if ((type === "jsonb" || type === "json") && typeof v === "string") { try { row[col] = JSON.parse(v); } catch {} }
       else if (type === "timestamptz" || type === "timestamp") row[col] = new Date(typeof v === "number" ? v : String(v));
@@ -152,6 +163,7 @@ function openSqlite(file, schema) {
     let st = statements.get(text);
     if (!st) {
       st = db.prepare(toSqlite(text));
+      st.colTypes = typesOf(st);
       statements.set(text, st);
       if (statements.size > 500) statements.delete(statements.keys().next().value);
     }
@@ -161,7 +173,7 @@ function openSqlite(file, schema) {
     const st = prepare(text);
     const args = params.map(bindValue);
     if (/^\s*(SELECT|WITH|PRAGMA)\b/i.test(text) || /\bRETURNING\b/i.test(text)) {
-      const rows = st.all(...args).map((r) => decode({ ...r }));
+      const rows = st.all(...args).map((r) => decode({ ...r }, st.colTypes));
       return { rows, rowCount: rows.length };
     }
     const info = st.run(...args);
