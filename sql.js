@@ -103,17 +103,47 @@ function toSqlite(text) {
     .replace(/\b(big)?serial\s+PRIMARY KEY/gi, "INTEGER PRIMARY KEY AUTOINCREMENT");
 }
 
-// The schema, one statement at a time. SQLite has no ADD COLUMN IF NOT EXISTS, so that's
-// checked here.
+// The schema, one statement at a time. Postgres schemas grow with ALTER TABLE … ADD COLUMN
+// IF NOT EXISTS, which SQLite doesn't have (nor can it add a UNIQUE column, or one that
+// defaults to the time). So a table made here gets those columns in its CREATE TABLE, and
+// on an existing table a missing one is added plainly, with a unique index or its default
+// filled in.
+const ADD_COLUMN = /^ALTER TABLE\s+([a-z_][a-z0-9_]*)\s+ADD COLUMN\s+IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s+([\s\S]*)$/i;
 function applySchema(db, schema) {
-  for (const raw of toSqlite(schema).split(/;\s*(?:\n|$)/)) {
-    const st = raw.replace(/^\s*--.*$/gm, "").trim();
-    if (!st) continue;
-    const add = st.match(/^ALTER TABLE\s+([a-z_][a-z0-9_]*)\s+ADD COLUMN\s+IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s+([\s\S]*)$/i);
+  const statements = toSqlite(schema).split(/;\s*(?:\n|$)/).map((raw) => raw.replace(/^\s*--.*$/gm, "").trim()).filter(Boolean);
+  const added = new Map(); // table -> [column definitions from ALTER TABLE … ADD COLUMN]
+  for (const st of statements) {
+    const m = st.match(ADD_COLUMN);
+    if (m) (added.get(m[1].toLowerCase()) || added.set(m[1].toLowerCase(), []).get(m[1].toLowerCase())).push(`${m[2]} ${m[3]}`);
+  }
+  const exists = (table) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+  const hasColumn = (table, column) => !!db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column);
+  for (const st of statements) {
+    const add = st.match(ADD_COLUMN);
     if (add) {
       const [, table, column, rest] = add;
-      const has = db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column);
-      if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${rest}`);
+      if (hasColumn(table, column)) continue;
+      try {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${rest}`);
+      } catch {
+        const type = rest.match(/^[a-z0-9_]+/i)?.[0] || "";
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        if (/\bUNIQUE\b/i.test(rest)) db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${table}_${column}_unique ON ${table} (${column})`);
+        const def = rest.match(/\bDEFAULT\s+(\([^)]*\)\)?|'[^']*'|[^\s,]+)/i)?.[1];
+        if (def) db.exec(`UPDATE ${table} SET ${column} = ${def} WHERE ${column} IS NULL`);
+      }
+      continue;
+    }
+    const create = st.match(/^CREATE TABLE\s+IF NOT EXISTS\s+([a-z_][a-z0-9_]*)\s*\(([\s\S]*)\)\s*$/i);
+    if (create && added.has(create[1].toLowerCase()) && !exists(create[1])) {
+      const body = create[2].trimEnd();
+      // Columns before any table constraint (PRIMARY KEY (…), UNIQUE (…)…), as SQLite needs.
+      const parts = body.split(/,\s*\n/);
+      const firstConstraint = parts.findIndex((p) => /^\s*(PRIMARY KEY|UNIQUE|CONSTRAINT|FOREIGN KEY|CHECK)\s*\(/i.test(p));
+      const cols = added.get(create[1].toLowerCase());
+      if (firstConstraint < 0) parts.push(...cols);
+      else parts.splice(firstConstraint, 0, ...cols);
+      db.exec(`CREATE TABLE IF NOT EXISTS ${create[1]} (\n${parts.join(",\n")}\n)`);
       continue;
     }
     db.exec(st);
