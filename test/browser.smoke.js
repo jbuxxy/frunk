@@ -92,17 +92,16 @@ test("main screens work in a real browser", { skip }, async (t) => {
     await page.click("#doneBtn");
   });
 
-  await t.test("People: copy an invite link, with a toast above the dialog", async () => {
-    const invited = await page.evaluate(() => fetch("/api/admin/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "friend@example.com" }) }).then((r) => r.status));
-    assert.equal(invited, 200);
+  await t.test("People: invite someone; the link is copied, with a toast above the dialog", async () => {
     await page.click("#accountBtn");
     await page.waitForSelector("#accountDialog[open] #peopleBtn");
     await page.click("#peopleBtn");
-    await page.waitForSelector("#peopleDialog[open] .person-actions button");
-    const copy = await page.$$eval("#peopleDialog .person-actions button", (bs) => bs.findIndex((b) => b.textContent === "Copy link"));
-    await page.$$eval("#peopleDialog .person-actions button", (bs, i) => bs[i].click(), copy);
-    await page.waitForSelector("#peopleDialog .pill.done");
-    assert.equal(await page.$eval("#peopleDialog .pill.done", (b) => b.textContent), "Copied ✓");
+    await page.waitForSelector("#peopleDialog[open] #inviteForm [name=email]");
+    // (No email set up here, so the new link is copied: it's only ever shown when it's made.)
+    await page.type("#inviteForm [name=email]", "friend@example.com");
+    await page.click("#inviteForm button[type=submit]");
+    await page.waitForFunction(() => document.getElementById("toast").textContent === "Invite link copied");
+    await page.waitForFunction(() => [...document.querySelectorAll("#peopleDialog .person")].some((p) => p.textContent.includes("friend@example.com")));
     const toast = await page.$eval("#toast", (el) => ({ open: el.matches(":popover-open"), text: el.textContent }));
     assert.deepEqual(toast, { open: true, text: "Invite link copied" });
     // On screen, not just open: the toast's own color shows where it's drawn.
