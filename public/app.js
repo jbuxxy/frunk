@@ -1446,7 +1446,11 @@
       input.value = "";
       pickedTiles.clear();
       renderInviteTiles();
-      deliverInvite(inv);
+      if (inv.existing) {
+        // Already on Frunk: the picked tiles were added to their page instead.
+        const n = inv.sent.length;
+        toast(n ? `Already on Frunk: Added ${n} ${n === 1 ? "Tile" : "Tiles"} to Their Page` : "Already on Frunk: They Have These Tiles", 4000);
+      } else deliverInvite(inv);
       openPeople();
     } catch (err) {
       toast(err.message);

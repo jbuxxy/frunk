@@ -1127,6 +1127,14 @@ on("POST", "/api/admin/invites", "admin", async ({ req, res, user }) => {
   const { email, tiles } = (await readBody(req)) || {};
   // Tile ids from the admin's own page; copies go into the invite.
   const picked = Array.isArray(tiles) ? user.sites.filter((t) => tiles.includes(t.id)) : [];
+  // Already on Frunk: the picked tiles go straight onto their page, as with Send (an
+  // invite's tiles only start a new account). No reset link they didn't ask for.
+  const existing = accounts.byEmail(email);
+  if (existing && picked.length) {
+    const result = { existing: true, email: existing.email, sent: [], had: [], full: [] };
+    for (const site of picked) result[giveTile(user, site, existing)].push(site.name);
+    return json(res, 200, result);
+  }
   const invite = accounts.createInvite(email, picked);
   if (!invite) return json(res, 400, { error: "That doesn't look like an email address." });
   return sendInvite(req, res, user, invite);
@@ -1165,20 +1173,29 @@ on("POST", "/api/admin/send-tile", "admin", async ({ req, res, user }) => {
   for (const id of new Set(to)) {
     const target = userById(id);
     if (!target || target.id === user.id) continue;
-    const label = target.name || target.email;
-    if (target.sites.some((s) => s.url === site.url)) result.had.push(label);
-    else if (target.sites.length >= 200) result.full.push(label);
-    else {
-      // From an admin: it carries a grant (Frunk Access), whatever the admin's own tile had.
-      const { grant: _own, ...plain } = site;
-      const copy = { ...plain, id: crypto.randomUUID(), grant: accounts.grantStamp(user.id) };
-      accounts.addSharedTile(target, copy, { tile: copy.id, name: site.name, from: user.name || user.email, at: Date.now() });
-      parties.notify(target.id, { type: "shared" }); // on their screen now, not at their next refresh
-      result.sent.push(label);
-    }
+    result[giveTile(user, site, target)].push(target.name || target.email);
   }
   return json(res, 200, result);
 });
+// One of the admin's tiles onto someone's page (Send, or Invite for someone already on
+// Frunk): "sent", or "had" (a tile for that address already) or "full" (200 tiles).
+// The same site counts as had whatever the path (plex…/ and plex…/web); if theirs
+// didn't come from an admin, it now does, so it lets them in like a sent one.
+function giveTile(admin, site, target) {
+  const origin = (u) => { try { return new URL(u).origin.toLowerCase(); } catch { return u; } };
+  const had = target.sites.find((s) => origin(s.url) === origin(site.url));
+  if (had) {
+    accounts.grantTile(target, had.id, admin.id);
+    return "had";
+  }
+  if (target.sites.length >= 200) return "full";
+  // From an admin: it carries a grant (Frunk Access), whatever the admin's own tile had.
+  const { grant: _own, ...plain } = site;
+  const copy = { ...plain, id: crypto.randomUUID(), grant: accounts.grantStamp(admin.id) };
+  accounts.addSharedTile(target, copy, { tile: copy.id, name: site.name, from: admin.name || admin.email, at: Date.now() });
+  parties.notify(target.id, { type: "shared" }); // on their screen now, not at their next refresh
+  return "sent";
+}
 
 // ---------- Frunk Access (access.js, docs/frunk-access.md) ----------
 // Other apps ask whether an email may sign in: yes when that person has a tile for the

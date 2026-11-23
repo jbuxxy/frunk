@@ -222,11 +222,11 @@ function createAccounts({ dataDir, ownerEmail, store }) {
       return o?.grant && originOf(o.url) === originOf(s.url) ? { ...clean, grant: o.grant } : clean;
     });
   }
-  // The one-time backfill (tools/access-backfill.js): mark a tile as given by an admin.
+  // Mark a tile they already have as given by an admin (Send of a tile they had).
   function grantTile(user, tileId, by) {
     const t = user.sites.find((s) => s.id === tileId);
     if (!t || t.grant) return false;
-    t.grant = { ...grantStamp(by), backfill: true };
+    t.grant = grantStamp(by);
     save();
     return true;
   }
